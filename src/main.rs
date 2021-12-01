@@ -13,12 +13,13 @@ use tokio::net::UdpSocket;
 async fn main() -> Result<(), std::io::Error> {
     let target = args().nth(1).unwrap();
 
-    let mut tasks = vec![];
-    let recv_task = tokio::spawn(receiver(target.clone()));
-
-    let semaphore = Arc::new(Semaphore::new(8));
-
+    let semaphore = Arc::new(Semaphore::new(4));
     let counter_mutex = Arc::new(Mutex::new(0));
+
+
+    let mut tasks = vec![];
+    let recv_task = tokio::spawn(receiver(Arc::clone(&semaphore), target.clone()));
+
 
     for task in 0..255 {
         let _target = target.clone();
@@ -26,20 +27,19 @@ async fn main() -> Result<(), std::io::Error> {
         let counter_mutex = Arc::clone(&counter_mutex);
 
         tasks.push(tokio::spawn(async move {
-            if let Ok(permit) = semaphore.clone().acquire_owned().await {
+            if let Ok(permit) = semaphore.clone().acquire().await {
                 let sock = UdpSocket::bind(format!("192.168.1.64:{}", 8000 + task)).await.unwrap();
-                let mut counter = counter_mutex.lock().await;
-
-                *counter += 1;
-
-                sock.set_ttl(*counter as u32).unwrap();
+                
+                let _c = {
+                    let mut counter = counter_mutex.lock().await;
+                    *counter += 1;
+                    *counter
+                };
+                
+                sock.set_ttl(_c as u32).unwrap();             
                 sock.send_to(&[], (_target, 33434)).await.unwrap();
 
-                drop(permit);
-
-                if (task + 1) % 8 == 0 {
-                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;    
-                }
+                permit.forget();
             }
         }));
     }
@@ -51,7 +51,7 @@ async fn main() -> Result<(), std::io::Error> {
     Ok(())
 }
 
-async fn receiver(target: String) -> Result<(), std::io::Error> {
+async fn receiver(semaphore: Arc<Semaphore>, target: String) -> Result<(), std::io::Error> {
     let mut buf = [0u8; 1024];
     let sock = RawSocket::new(Domain::ipv4(), Type::raw(), Protocol::icmpv4().into()).unwrap();
 
@@ -59,7 +59,8 @@ async fn receiver(target: String) -> Result<(), std::io::Error> {
 
     loop {
         let (_len, addr) = sock.recv_from(&mut buf).await?;
-
+        
+        semaphore.add_permits(1);
         println!("{:?}", addr);
 
         if addr.ip() == format!("{}:0", target).parse::<SocketAddr>().unwrap().ip() {
