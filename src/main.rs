@@ -21,7 +21,7 @@ async fn main() -> Result<(), std::io::Error> {
     let recv_task = tokio::spawn(receiver(Arc::clone(&semaphore), target.clone()));
 
 
-    for task in 0..255 {
+    for task in 0..256 {
         let _target = target.clone();
         let semaphore = Arc::clone(&semaphore);
         let counter_mutex = Arc::clone(&counter_mutex);
