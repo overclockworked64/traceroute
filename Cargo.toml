@@ -8,3 +8,4 @@ edition = "2018"
 [dependencies]
 tokio = { version = "1", features = ["full"] }
 raw-socket  = "0.0.2"
+pnet = "0.28.0"
