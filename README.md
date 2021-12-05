@@ -4,6 +4,6 @@ An asynchronous traceroute toy implementation written in Rust.
 
 # How it works
 
-**traceroute** sends UDP datagrams and relies on the hosts along the path to send an ICMP packet back when TTL drops to 0. Starting with TTL == 1, it gradually increments it until the destination host is reached.
+**traceroute** prints the hosts that packets traverse along the path to the target. At a lower level, it starts from TTL == 1 and sends some UDP datagrams or ICMP echo request packets concurrently, gradually incrementing TTL until they reach the destination host. When TTL drops to 0, the host sends back an ICMP (time exceeded) message.
 
 Status: WIP
