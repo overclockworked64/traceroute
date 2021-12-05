@@ -1,4 +1,3 @@
-use raw_socket::ffi::c_int;
 use raw_socket::tokio::RawSocket;
 use raw_socket::{Domain, Protocol, Type};
 use std::{
@@ -64,18 +63,20 @@ async fn main() -> Result<(), std::io::Error> {
                         use pnet::packet::icmp::echo_request::MutableEchoRequestPacket;
                         use pnet::packet::icmp::{checksum, IcmpCode, IcmpPacket, IcmpType};
                         use raw_socket::option::{Level, Name};
-                        
+                        use raw_socket::ffi::c_int; 
+
                         let sock = RawSocket::new(Domain::ipv4(), Type::raw(), Protocol::icmpv4().into()).unwrap();
                         
-                        let mut buf = [0u8; 8];
+                        let mut buf = [0u8; 8]; // 8: ICMP header length
                         let mut packet = MutableEchoRequestPacket::new(&mut buf).unwrap();
+
                         packet.set_icmp_type(IcmpType::new(8));
                         packet.set_icmp_code(IcmpCode::new(0));
                         packet.set_sequence_number(task);
                         packet.set_identifier(0x1337);
                         packet.set_checksum(checksum(&IcmpPacket::new(&packet.packet()).unwrap()));
 
-                        sock.set_sockopt(Level::IPV4, Name::from(2), &(_c as c_int)).unwrap();
+                        sock.set_sockopt(Level::IPV4, Name::from(2), &(_c as c_int)).unwrap(); // 2: IP_TTL
                         sock.send_to(packet.packet(), (_target, 0)).await.unwrap();
                     }
                 }
