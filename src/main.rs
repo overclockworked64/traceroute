@@ -1,13 +1,8 @@
 use raw_socket::tokio::RawSocket;
 use raw_socket::{Domain, Protocol, Type};
-use std::{
-    env::args,
-    net::SocketAddr,
-    sync::Arc,
-};
-use tokio::sync::{Mutex, Semaphore};
+use std::{env::args, net::SocketAddr, sync::Arc};
 use tokio::net::UdpSocket;
-
+use tokio::sync::{Mutex, Semaphore};
 
 #[derive(Clone, Copy)]
 enum TracerouteProtocol {
@@ -33,10 +28,8 @@ async fn main() -> Result<(), std::io::Error> {
     let semaphore = Arc::new(Semaphore::new(4));
     let counter_mutex = Arc::new(Mutex::new(0));
 
-
     let mut tasks = vec![];
     let recv_task = tokio::spawn(receiver(Arc::clone(&semaphore), target.clone()));
-
 
     for task in 0..256 {
         let _target = target.clone();
@@ -53,20 +46,24 @@ async fn main() -> Result<(), std::io::Error> {
 
                 match protocol {
                     TracerouteProtocol::Udp => {
-                        let sock = UdpSocket::bind(format!("192.168.1.64:{}", 8000 + task)).await.unwrap();
-                       
-                        sock.set_ttl(_c as u32).unwrap();             
-                        sock.send_to(&[], (_target, 33434)).await.unwrap();        
+                        let sock = UdpSocket::bind(format!("192.168.1.64:{}", 8000 + task))
+                            .await
+                            .unwrap();
+
+                        sock.set_ttl(_c as u32).unwrap();
+                        sock.send_to(&[], (_target, 33434)).await.unwrap();
                     }
                     TracerouteProtocol::Icmp => {
-                        use pnet::packet::Packet;
                         use pnet::packet::icmp::echo_request::MutableEchoRequestPacket;
                         use pnet::packet::icmp::{checksum, IcmpCode, IcmpPacket, IcmpType};
+                        use pnet::packet::Packet;
+                        use raw_socket::ffi::c_int;
                         use raw_socket::option::{Level, Name};
-                        use raw_socket::ffi::c_int; 
 
-                        let sock = RawSocket::new(Domain::ipv4(), Type::raw(), Protocol::icmpv4().into()).unwrap();
-                        
+                        let sock =
+                            RawSocket::new(Domain::ipv4(), Type::raw(), Protocol::icmpv4().into())
+                                .unwrap();
+
                         let mut buf = [0u8; 8]; // 8: ICMP header length
                         let mut packet = MutableEchoRequestPacket::new(&mut buf).unwrap();
 
@@ -76,7 +73,8 @@ async fn main() -> Result<(), std::io::Error> {
                         packet.set_identifier(0x1337);
                         packet.set_checksum(checksum(&IcmpPacket::new(&packet.packet()).unwrap()));
 
-                        sock.set_sockopt(Level::IPV4, Name::from(2), &(_c as c_int)).unwrap(); // 2: IP_TTL
+                        sock.set_sockopt(Level::IPV4, Name::from(2), &(_c as c_int))
+                            .unwrap(); // 2: IP_TTL
                         sock.send_to(packet.packet(), (_target, 0)).await.unwrap();
                     }
                 }
@@ -88,7 +86,7 @@ async fn main() -> Result<(), std::io::Error> {
 
     if let Ok(_) = recv_task.await {
         semaphore.close();
-    }    
+    }
 
     Ok(())
 }
@@ -99,7 +97,7 @@ async fn receiver(semaphore: Arc<Semaphore>, target: String) -> Result<(), std::
 
     loop {
         let (_len, addr) = sock.recv_from(&mut buf).await?;
-        
+
         semaphore.add_permits(1);
         println!("{:?}", addr);
 
