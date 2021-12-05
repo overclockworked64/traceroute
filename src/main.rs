@@ -69,7 +69,7 @@ async fn main() -> Result<(), std::io::Error> {
 
                         packet.set_icmp_type(IcmpType::new(8));
                         packet.set_icmp_code(IcmpCode::new(0));
-                        packet.set_sequence_number(task);
+                        packet.set_sequence_number(_c);
                         packet.set_identifier(0x1337);
                         packet.set_checksum(checksum(&IcmpPacket::new(&packet.packet()).unwrap()));
 
