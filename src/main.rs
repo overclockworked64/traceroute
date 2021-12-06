@@ -1,9 +1,14 @@
-use pnet::packet::icmp::{IcmpTypes, IcmpPacket};
 use raw_socket::tokio::RawSocket;
 use raw_socket::{Domain, Protocol, Type};
-use std::{env::args, sync::Arc};
+use structopt::StructOpt;
 use tokio::net::UdpSocket;
 use tokio::sync::{Mutex, Semaphore};
+
+#[derive(StructOpt)]
+struct Opt {
+    target: String,
+    protocol: Option<String>,
+}
 
 #[derive(Clone, Copy)]
 enum TracerouteProtocol {
@@ -23,8 +28,10 @@ impl TracerouteProtocol {
 
 #[tokio::main]
 async fn main() -> Result<(), std::io::Error> {
-    let target = args().nth(1).unwrap();
-    let protocol = TracerouteProtocol::from_str(&args().nth(2).unwrap());
+    let opt = Opt::from_args();
+
+    let target = opt.target;
+    let protocol = TracerouteProtocol::from_str(&opt.protocol.unwrap_or("udp".to_string()));
 
     let semaphore = Arc::new(Semaphore::new(4));
     let counter_mutex = Arc::new(Mutex::new(0));
