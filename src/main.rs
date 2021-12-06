@@ -1,6 +1,6 @@
 use raw_socket::tokio::RawSocket;
 use raw_socket::{Domain, Protocol, Type};
-use std::{env::args, net::SocketAddr, sync::Arc};
+use std::{env::args, sync::Arc};
 use tokio::net::UdpSocket;
 use tokio::sync::{Mutex, Semaphore};
 
@@ -29,7 +29,7 @@ async fn main() -> Result<(), std::io::Error> {
     let counter_mutex = Arc::new(Mutex::new(0));
 
     let mut tasks = vec![];
-    let recv_task = tokio::spawn(receiver(Arc::clone(&semaphore), target.clone()));
+    let recv_task = tokio::spawn(receiver(Arc::clone(&semaphore)));
 
     for task in 0..256 {
         let _target = target.clone();
@@ -91,7 +91,7 @@ async fn main() -> Result<(), std::io::Error> {
     Ok(())
 }
 
-async fn receiver(semaphore: Arc<Semaphore>, target: String) -> Result<(), std::io::Error> {
+async fn receiver(semaphore: Arc<Semaphore>) -> Result<(), std::io::Error> {
     use pnet::packet::icmp::IcmpPacket;
     use pnet::packet::icmp::IcmpTypes;
 
@@ -102,14 +102,12 @@ async fn receiver(semaphore: Arc<Semaphore>, target: String) -> Result<(), std::
         let (_bytes_received, addr) = sock.recv_from(&mut buf).await?;
         let packet = IcmpPacket::new(&buf[20..]).unwrap();
 
-        if packet.get_icmp_type() == IcmpTypes::TimeExceeded {
-            semaphore.add_permits(1);
-            println!("{:?}", addr);
-        } else if packet.get_icmp_type() == IcmpTypes::EchoReply {
-            if addr.ip() == format!("{}:0", target).parse::<SocketAddr>().unwrap().ip() {
-                println!("{:?}", addr);
-                break;
-            }
+        println!("{:?}", addr);
+
+        match packet.get_icmp_type() {
+            IcmpTypes::TimeExceeded => semaphore.add_permits(1),
+            IcmpTypes::EchoReply => break,
+            _ => {}
         }
     }
 
