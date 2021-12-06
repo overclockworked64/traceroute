@@ -92,17 +92,24 @@ async fn main() -> Result<(), std::io::Error> {
 }
 
 async fn receiver(semaphore: Arc<Semaphore>, target: String) -> Result<(), std::io::Error> {
-    let mut buf = [0u8; 64];
+    use pnet::packet::icmp::IcmpPacket;
+    use pnet::packet::icmp::IcmpTypes;
+
+    let mut buf = [0u8; 1024];
     let sock = RawSocket::new(Domain::ipv4(), Type::raw(), Protocol::icmpv4().into()).unwrap();
 
     loop {
-        let (_len, addr) = sock.recv_from(&mut buf).await?;
+        let (_bytes_received, addr) = sock.recv_from(&mut buf).await?;
+        let packet = IcmpPacket::new(&buf[20..]).unwrap();
 
-        semaphore.add_permits(1);
-        println!("{:?}", addr);
-
-        if addr.ip() == format!("{}:0", target).parse::<SocketAddr>().unwrap().ip() {
-            break;
+        if packet.get_icmp_type() == IcmpTypes::TimeExceeded {
+            semaphore.add_permits(1);
+            println!("{:?}", addr);
+        } else if packet.get_icmp_type() == IcmpTypes::EchoReply {
+            if addr.ip() == format!("{}:0", target).parse::<SocketAddr>().unwrap().ip() {
+                println!("{:?}", addr);
+                break;
+            }
         }
     }
 
