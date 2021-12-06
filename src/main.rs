@@ -1,10 +1,15 @@
 use pnet::packet::icmp::{IcmpPacket, IcmpTypes};
+use raw_socket::ffi::c_int;
 use raw_socket::tokio::RawSocket;
 use raw_socket::{Domain, Protocol, Type};
 use std::sync::Arc;
 use structopt::StructOpt;
 use tokio::net::UdpSocket;
 use tokio::sync::{Mutex, Semaphore};
+
+const IP_TTL: c_int = 2;
+const IP_HDR_LEN: usize = 20;
+const ICMP_HDR_LEN: usize = 8;
 
 #[derive(StructOpt)]
 struct Opt {
@@ -67,14 +72,13 @@ async fn main() -> Result<(), std::io::Error> {
                         use pnet::packet::icmp::echo_request::MutableEchoRequestPacket;
                         use pnet::packet::icmp::{checksum, IcmpCode};
                         use pnet::packet::Packet;
-                        use raw_socket::ffi::c_int;
                         use raw_socket::option::{Level, Name};
 
                         let sock =
                             RawSocket::new(Domain::ipv4(), Type::raw(), Protocol::icmpv4().into())
                                 .unwrap();
 
-                        let mut buf = [0u8; 8]; // 8: ICMP header length
+                        let mut buf = [0u8; ICMP_HDR_LEN];
                         let mut packet = MutableEchoRequestPacket::new(&mut buf).unwrap();
 
                         packet.set_icmp_type(IcmpTypes::EchoRequest);
@@ -83,8 +87,8 @@ async fn main() -> Result<(), std::io::Error> {
                         packet.set_identifier(0x1337);
                         packet.set_checksum(checksum(&IcmpPacket::new(&packet.packet()).unwrap()));
 
-                        sock.set_sockopt(Level::IPV4, Name::from(2), &(_c as c_int))
-                            .unwrap(); // 2: IP_TTL
+                        sock.set_sockopt(Level::IPV4, Name::from(IP_TTL), &(_c as c_int))
+                            .unwrap();
                         sock.send_to(packet.packet(), (_target, 0)).await.unwrap();
                     }
                 }
@@ -107,7 +111,7 @@ async fn receiver(semaphore: Arc<Semaphore>) -> Result<(), std::io::Error> {
 
     loop {
         let (_bytes_received, addr) = sock.recv_from(&mut buf).await?;
-        let packet = IcmpPacket::new(&buf[20..]).unwrap();
+        let packet = IcmpPacket::new(&buf[IP_HDR_LEN..]).unwrap();
 
         println!("{:?}", addr);
 
