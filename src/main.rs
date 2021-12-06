@@ -111,7 +111,7 @@ async fn receiver(semaphore: Arc<Semaphore>) -> Result<(), std::io::Error> {
 
         match packet.get_icmp_type() {
             IcmpTypes::TimeExceeded => semaphore.add_permits(1),
-            IcmpTypes::EchoReply => break,
+            IcmpTypes::EchoReply | IcmpTypes::DestinationUnreachable => break,
             _ => {}
         }
     }
