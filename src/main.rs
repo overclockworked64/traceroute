@@ -1,3 +1,4 @@
+use pnet::packet::icmp::{IcmpTypes, IcmpPacket};
 use raw_socket::tokio::RawSocket;
 use raw_socket::{Domain, Protocol, Type};
 use std::{env::args, sync::Arc};
@@ -55,7 +56,7 @@ async fn main() -> Result<(), std::io::Error> {
                     }
                     TracerouteProtocol::Icmp => {
                         use pnet::packet::icmp::echo_request::MutableEchoRequestPacket;
-                        use pnet::packet::icmp::{checksum, IcmpCode, IcmpPacket, IcmpType};
+                        use pnet::packet::icmp::{checksum, IcmpCode};
                         use pnet::packet::Packet;
                         use raw_socket::ffi::c_int;
                         use raw_socket::option::{Level, Name};
@@ -67,7 +68,7 @@ async fn main() -> Result<(), std::io::Error> {
                         let mut buf = [0u8; 8]; // 8: ICMP header length
                         let mut packet = MutableEchoRequestPacket::new(&mut buf).unwrap();
 
-                        packet.set_icmp_type(IcmpType::new(8));
+                        packet.set_icmp_type(IcmpTypes::EchoRequest);
                         packet.set_icmp_code(IcmpCode::new(0));
                         packet.set_sequence_number(_c);
                         packet.set_identifier(0x1337);
@@ -92,9 +93,6 @@ async fn main() -> Result<(), std::io::Error> {
 }
 
 async fn receiver(semaphore: Arc<Semaphore>) -> Result<(), std::io::Error> {
-    use pnet::packet::icmp::IcmpPacket;
-    use pnet::packet::icmp::IcmpTypes;
-
     let mut buf = [0u8; 1024];
     let sock = RawSocket::new(Domain::ipv4(), Type::raw(), Protocol::icmpv4().into()).unwrap();
 
