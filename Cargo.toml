@@ -10,3 +10,4 @@ tokio = { version = "1", features = ["full"] }
 raw-socket  = "0.0.2"
 pnet = "0.28.0"
 structopt = "0.3.25"
+dns-lookup = "1.0.8"

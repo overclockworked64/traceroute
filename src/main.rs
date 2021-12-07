@@ -106,14 +106,21 @@ async fn main() -> Result<(), std::io::Error> {
 }
 
 async fn receiver(semaphore: Arc<Semaphore>) -> Result<(), std::io::Error> {
+    use dns_lookup::lookup_addr;
+
     let mut buf = [0u8; 1024];
     let sock = RawSocket::new(Domain::ipv4(), Type::raw(), Protocol::icmpv4().into()).unwrap();
 
     loop {
         let (_bytes_received, addr) = sock.recv_from(&mut buf).await?;
         let packet = IcmpPacket::new(&buf[IP_HDR_LEN..]).unwrap();
-
-        println!("{:?}", addr);
+        
+        let reverse_dns_task = tokio::task::spawn_blocking(move || {
+            lookup_addr(&addr.clone().ip()).unwrap()
+        });
+        let hostname = reverse_dns_task.await.unwrap();
+        
+        println!("{} ({:?})", hostname, addr);
 
         match packet.get_icmp_type() {
             IcmpTypes::TimeExceeded => semaphore.add_permits(1),

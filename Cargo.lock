@@ -71,6 +71,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "dns-lookup"
+version = "1.0.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "53ecafc952c4528d9b51a458d1a8904b81783feff9fde08ab6ed2545ff396872"
+dependencies = [
+ "cfg-if",
+ "libc",
+ "socket2 0.4.2",
+ "winapi",
+]
+
+[[package]]
 name = "glob"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -363,7 +375,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c85584115c1c5659a0b19177e3e3ed0520fba7d66850ce5f315439a8c09a66a9"
 dependencies = [
  "libc",
- "socket2",
+ "socket2 0.3.19",
  "tokio",
 ]
 
@@ -427,6 +439,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "122e570113d28d773067fab24266b66753f6ea915758651696b6e35e49f88d6e"
 dependencies = [
  "cfg-if",
+ "libc",
+ "winapi",
+]
+
+[[package]]
+name = "socket2"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5dc90fe6c7be1a323296982db1836d1ea9e47b6839496dde9a541bc496df3516"
+dependencies = [
  "libc",
  "winapi",
 ]
@@ -516,6 +538,7 @@ dependencies = [
 name = "traceroute"
 version = "0.1.0"
 dependencies = [
+ "dns-lookup",
  "pnet",
  "raw-socket",
  "structopt",
