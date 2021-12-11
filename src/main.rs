@@ -1,7 +1,13 @@
-use pnet::packet::icmp::{IcmpPacket, IcmpTypes};
-use raw_socket::ffi::c_int;
-use raw_socket::tokio::RawSocket;
-use raw_socket::{Domain, Protocol, Type};
+use pnet::packet::icmp::{
+    echo_request::MutableEchoRequestPacket,
+    {IcmpPacket, IcmpTypes},
+};
+use pnet::packet::Packet;
+use raw_socket::{
+    ffi::c_int,
+    tokio::RawSocket,
+    {Domain, Protocol, Type},
+};
 use std::sync::Arc;
 use structopt::StructOpt;
 use tokio::net::UdpSocket;
@@ -69,9 +75,6 @@ async fn main() -> Result<(), std::io::Error> {
                         sock.send_to(&[], (_target, 33434)).await.unwrap();
                     }
                     TracerouteProtocol::Icmp => {
-                        use pnet::packet::icmp::echo_request::MutableEchoRequestPacket;
-                        use pnet::packet::icmp::{checksum, IcmpCode};
-                        use pnet::packet::Packet;
                         use raw_socket::option::{Level, Name};
 
                         let sock =
@@ -79,17 +82,13 @@ async fn main() -> Result<(), std::io::Error> {
                                 .unwrap();
 
                         let mut buf = [0u8; ICMP_HDR_LEN];
-                        let mut packet = MutableEchoRequestPacket::new(&mut buf).unwrap();
-
-                        packet.set_icmp_type(IcmpTypes::EchoRequest);
-                        packet.set_icmp_code(IcmpCode::new(0));
-                        packet.set_sequence_number(_c);
-                        packet.set_identifier(0x1337);
-                        packet.set_checksum(checksum(&IcmpPacket::new(&packet.packet()).unwrap()));
+                        let icmp_packet = build_icmp_packet(&mut buf, _c);
 
                         sock.set_sockopt(Level::IPV4, Name::from(IP_TTL), &(_c as c_int))
                             .unwrap();
-                        sock.send_to(packet.packet(), (_target, 0)).await.unwrap();
+                        sock.send_to(icmp_packet.packet(), (_target, 0))
+                            .await
+                            .unwrap();
                     }
                 }
 
@@ -114,12 +113,11 @@ async fn receiver(semaphore: Arc<Semaphore>) -> Result<(), std::io::Error> {
     loop {
         let (_bytes_received, addr) = sock.recv_from(&mut buf).await?;
         let packet = IcmpPacket::new(&buf[IP_HDR_LEN..]).unwrap();
-        
-        let reverse_dns_task = tokio::task::spawn_blocking(move || {
-            lookup_addr(&addr.clone().ip()).unwrap()
-        });
+
+        let reverse_dns_task =
+            tokio::task::spawn_blocking(move || lookup_addr(&addr.clone().ip()).unwrap());
         let hostname = reverse_dns_task.await.unwrap();
-        
+
         println!("{} ({:?})", hostname, addr);
 
         match packet.get_icmp_type() {
@@ -130,4 +128,18 @@ async fn receiver(semaphore: Arc<Semaphore>) -> Result<(), std::io::Error> {
     }
 
     Ok(())
+}
+
+fn build_icmp_packet(buf: &mut [u8], seq_no: u16) -> MutableEchoRequestPacket {
+    use pnet::packet::icmp::{checksum, IcmpCode};
+
+    let mut packet = MutableEchoRequestPacket::new(buf).unwrap();
+
+    packet.set_icmp_type(IcmpTypes::EchoRequest);
+    packet.set_icmp_code(IcmpCode::new(0));
+    packet.set_sequence_number(seq_no);
+    packet.set_identifier(0x1337);
+    packet.set_checksum(checksum(&IcmpPacket::new(&packet.packet()).unwrap()));
+
+    packet
 }
