@@ -130,10 +130,11 @@ async fn receiver(semaphore: Arc<Semaphore>) -> Result<(), std::io::Error> {
     Ok(())
 }
 
-fn build_icmp_packet(buf: &mut [u8], seq_no: u16) -> MutableEchoRequestPacket {
+fn build_icmp_packet(buf: &mut [u8]) -> MutableEchoRequestPacket {
     use pnet::packet::icmp::{checksum, IcmpCode};
 
     let mut packet = MutableEchoRequestPacket::new(buf).unwrap();
+    let seq_no = rand::random::<u16>();
 
     packet.set_icmp_type(IcmpTypes::EchoRequest);
     packet.set_icmp_code(IcmpCode::new(0));
