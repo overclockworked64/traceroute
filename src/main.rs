@@ -53,7 +53,7 @@ async fn main() -> Result<(), std::io::Error> {
     let recv_task = tokio::spawn(receiver(Arc::clone(&semaphore)));
 
     for task in 0..256 {
-        let _target = target.clone();
+        let target = target.clone();
         let semaphore = Arc::clone(&semaphore);
         let counter_mutex = Arc::clone(&counter_mutex);
 
@@ -72,7 +72,7 @@ async fn main() -> Result<(), std::io::Error> {
                             .unwrap();
 
                         sock.set_ttl(_c as u32).unwrap();
-                        sock.send_to(&[], (_target, 33434)).await.unwrap();
+                        sock.send_to(&[], (target, 33434)).await.unwrap();
                     }
                     TracerouteProtocol::Icmp => {
                         use raw_socket::option::{Level, Name};
@@ -86,7 +86,7 @@ async fn main() -> Result<(), std::io::Error> {
 
                         sock.set_sockopt(Level::IPV4, Name::from(IP_TTL), &(_c as c_int))
                             .unwrap();
-                        sock.send_to(icmp_packet.packet(), (_target, 0))
+                        sock.send_to(icmp_packet.packet(), (target, 0))
                             .await
                             .unwrap();
                     }
