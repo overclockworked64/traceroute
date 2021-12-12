@@ -47,19 +47,19 @@ async fn main() -> Result<(), std::io::Error> {
     let protocol = TracerouteProtocol::from_str(&opt.protocol.unwrap_or("udp".to_string()));
 
     let semaphore = Arc::new(Semaphore::new(4));
-    let counter_mutex = Arc::new(Mutex::new(0));
+    let counter_mutex = Arc::new(Mutex::new(0u8));
 
     let mut tasks = vec![];
     let recv_task = tokio::spawn(receiver(Arc::clone(&semaphore)));
 
-    for task in 0..256 {
+    for task in 0..255 {
         let target = target.clone();
         let semaphore = Arc::clone(&semaphore);
         let counter_mutex = Arc::clone(&counter_mutex);
 
         tasks.push(tokio::spawn(async move {
             if let Ok(permit) = semaphore.clone().acquire().await {
-                let _c = {
+                let ttl = {
                     let mut counter = counter_mutex.lock().await;
                     *counter += 1;
                     *counter
@@ -71,7 +71,7 @@ async fn main() -> Result<(), std::io::Error> {
                             .await
                             .unwrap();
 
-                        sock.set_ttl(_c as u32).unwrap();
+                        sock.set_ttl(ttl as u32).unwrap();
                         sock.send_to(&[], (target, 33434)).await.unwrap();
                     }
                     TracerouteProtocol::Icmp => {
@@ -82,9 +82,9 @@ async fn main() -> Result<(), std::io::Error> {
                                 .unwrap();
 
                         let mut buf = [0u8; ICMP_HDR_LEN];
-                        let icmp_packet = build_icmp_packet(&mut buf, _c);
+                        let icmp_packet = build_icmp_packet(&mut buf);
 
-                        sock.set_sockopt(Level::IPV4, Name::from(IP_TTL), &(_c as c_int))
+                        sock.set_sockopt(Level::IPV4, Name::from(IP_TTL), &(ttl as c_int))
                             .unwrap();
                         sock.send_to(icmp_packet.packet(), (target, 0))
                             .await
