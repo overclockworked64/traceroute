@@ -1,0 +1,29 @@
+[package]
+name        = "raw-socket"
+version     = "0.0.2"
+edition     = "2018"
+
+authors     = ["Will <will@glozer.net>"]
+description = "Blocking and async raw sockets"
+license     = "MIT"
+
+[features]
+default      = ["async-tokio"]
+async-tokio  = ["tokio"]
+
+[dependencies]
+libc     = "0.2.81"
+socket2  = "0.3.19"
+
+[dependencies.tokio]
+version  = "1.0.1"
+features = ["net"]
+optional = true
+default-features = false
+
+[dev-dependencies]
+anyhow   = "1.0.37"
+
+[dev-dependencies.tokio]
+version  = "1.0.1"
+features = ["macros", "rt-multi-thread"]
