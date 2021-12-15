@@ -23,6 +23,10 @@ impl RawSocket {
         self.sys.bind(&sockaddr(addr)?)
     }
 
+    pub fn connect<A: ToSocketAddrs>(&self, addr: A) -> Result<()> {
+        self.sys.connect(&sockaddr(addr)?)
+    }
+
     pub fn local_addr(&self) -> Result<SocketAddr> {
         socketaddr(&self.sys.local_addr()?)
     }

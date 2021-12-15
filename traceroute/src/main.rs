@@ -1,14 +1,15 @@
-use pnet::packet::icmp::{
+use pnet::packet::{icmp::{
     echo_request::MutableEchoRequestPacket,
     {IcmpPacket, IcmpTypes},
-};
+}, ipv4::MutableIpv4Packet};
 use pnet::packet::Packet;
 use raw_socket::{
     ffi::c_int,
     tokio::RawSocket,
+    option::{Level, Name},
     {Domain, Protocol, Type},
 };
-use std::sync::Arc;
+use std::{sync::Arc, net::SocketAddr};
 use structopt::StructOpt;
 use tokio::net::UdpSocket;
 use tokio::sync::{Mutex, Semaphore};
@@ -16,11 +17,14 @@ use tokio::sync::{Mutex, Semaphore};
 const IP_TTL: c_int = 2;
 const IP_HDR_LEN: usize = 20;
 const ICMP_HDR_LEN: usize = 8;
+const EMSGSIZE: i32 = 90;
 
 #[derive(StructOpt)]
 struct Opt {
     target: String,
     protocol: Option<String>,
+    #[structopt(long)]
+    pmtud: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -45,6 +49,7 @@ async fn main() -> Result<(), std::io::Error> {
 
     let target = opt.target;
     let protocol = TracerouteProtocol::from_str(&opt.protocol.unwrap_or("udp".to_string()));
+    let path_maximum_transmission_unit_discovery = opt.pmtud;
 
     let semaphore = Arc::new(Semaphore::new(4));
     let counter_mutex = Arc::new(Mutex::new(0u8));
@@ -75,8 +80,6 @@ async fn main() -> Result<(), std::io::Error> {
                         sock.send_to(&[], (target, 33434)).await.unwrap();
                     }
                     TracerouteProtocol::Icmp => {
-                        use raw_socket::option::{Level, Name};
-
                         let sock =
                             RawSocket::new(Domain::ipv4(), Type::raw(), Protocol::icmpv4().into())
                                 .unwrap();
@@ -95,6 +98,10 @@ async fn main() -> Result<(), std::io::Error> {
                 permit.forget();
             }
         }));
+    }
+
+    if path_maximum_transmission_unit_discovery {
+        tokio::spawn(path_mtu_discovery(target));
     }
 
     if let Ok(_) = recv_task.await {
@@ -130,6 +137,34 @@ async fn receiver(semaphore: Arc<Semaphore>) -> Result<(), std::io::Error> {
     Ok(())
 }
 
+async fn path_mtu_discovery(target: String) {
+    let sock = RawSocket::new(Domain::ipv4(), Type::raw(), Protocol::from(255).into()).unwrap();
+
+    sock.connect((target.clone(), 0)).await.unwrap();
+
+    let mut mtu = 65535;
+
+    for ttl in 1..256 {
+        let mut buf = vec![0u8; mtu as usize];
+        let ipv4_packet = build_ipv4_packet(&mut buf);
+
+        sock.set_sockopt(Level::IPV4, Name::from(IP_TTL), &(ttl as c_int + 1))
+            .unwrap();
+
+        if let Err(e) = sock.send_to(ipv4_packet.packet(), (target.clone(), 0)).await {
+            if let Some(code) = e.raw_os_error() {
+                if code == EMSGSIZE {
+                    mtu = sock.get_sockopt(Level::IPV4, Name::IP_MTU).unwrap();
+                    
+                    println!("PMTU at hop {} is {}", ttl, mtu);
+                }
+            }
+        } else {
+            break;
+        }
+    }
+}
+
 fn build_icmp_packet(buf: &mut [u8]) -> MutableEchoRequestPacket {
     use pnet::packet::icmp::{checksum, IcmpCode};
 
@@ -141,6 +176,15 @@ fn build_icmp_packet(buf: &mut [u8]) -> MutableEchoRequestPacket {
     packet.set_sequence_number(seq_no);
     packet.set_identifier(0x1337);
     packet.set_checksum(checksum(&IcmpPacket::new(&packet.packet()).unwrap()));
+
+    packet
+}
+
+fn build_ipv4_packet(buf: &mut [u8]) -> MutableIpv4Packet {
+    use pnet::packet::ipv4::Ipv4Flags;
+
+    let mut packet = MutableIpv4Packet::new(buf).unwrap();
+    packet.set_flags(Ipv4Flags::DontFragment);
 
     packet
 }

@@ -22,6 +22,10 @@ impl RawSocket {
         self.io.get_ref().bind(addr)
     }
 
+    pub async fn connect<A: ToSocketAddrs>(&self, addr: A) -> Result<()> {
+        self.io.get_ref().connect(addr)
+    }
+
     pub fn local_addr(&self) -> Result<SocketAddr> {
         self.io.get_ref().local_addr()
     }

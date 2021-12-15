@@ -22,6 +22,7 @@ impl Level {
 pub struct Name(c_int);
 
 impl Name {
+    pub const IP_MTU:            Name = Name(ffi::IP_MTU);
     pub const IPV4_HDRINCL:      Name = Name(ffi::IP_HDRINCL);
     pub const IPV6_CHECKSUM:     Name = Name(ffi::IPV6_CHECKSUM);
     pub const IPV6_RECVHOPLIMIT: Name = Name(ffi::IPV6_RECVHOPLIMIT);
