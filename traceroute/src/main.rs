@@ -30,30 +30,6 @@ const IP_HDR_LEN: usize = 20;
 const ICMP_HDR_LEN: usize = 8;
 const EMSGSIZE: i32 = 90;
 
-#[derive(StructOpt)]
-struct Opt {
-    target: String,
-    protocol: Option<String>,
-    #[structopt(long)]
-    pmtud: bool,
-}
-
-#[derive(Clone, Copy)]
-enum TracerouteProtocol {
-    Udp,
-    Icmp,
-}
-
-impl TracerouteProtocol {
-    fn from_str(protocol: &str) -> Self {
-        match protocol {
-            "udp" => Self::Udp,
-            "icmp" => Self::Icmp,
-            _ => unreachable!(),
-        }
-    }
-}
-
 #[tokio::main]
 async fn main() -> Result<(), std::io::Error> {
     let opt = Opt::from_args();
@@ -141,41 +117,6 @@ async fn main() -> Result<(), std::io::Error> {
     Ok(())
 }
 
-async fn receiver(tx: Sender<Message>, semaphore: Arc<Semaphore>) -> Result<(), std::io::Error> {
-    let mut buf = [0u8; 1024];
-    let sock = RawSocket::new(Domain::ipv4(), Type::raw(), Protocol::icmpv4().into()).unwrap();
-
-    loop {
-        let (_bytes_received, ip_addr) = sock.recv_from(&mut buf).await?;
-        let packet = IcmpPacket::new(&buf[IP_HDR_LEN..]).unwrap();
-
-        let reverse_dns_task = tokio::task::spawn_blocking(move || {
-            dns_lookup::lookup_addr(&ip_addr.clone().ip()).unwrap()
-        });
-        let hostname = reverse_dns_task.await.unwrap();
-
-        let info = Info {
-            hostname: Some(hostname),
-            ip_addr: Some(ip_addr),
-            ttl: None,
-            mtu: None,
-        };
-
-        tx.send(Message::Some(info)).await.unwrap();
-
-        match packet.get_icmp_type() {
-            IcmpTypes::TimeExceeded => semaphore.add_permits(1),
-            IcmpTypes::EchoReply | IcmpTypes::DestinationUnreachable => {
-                tx.send(Message::None).await.unwrap();
-                break;
-            }
-            _ => {}
-        }
-    }
-
-    Ok(())
-}
-
 async fn path_mtu_discovery(
     tx: Sender<Message>,
     target: String,
@@ -221,19 +162,39 @@ async fn path_mtu_discovery(
     }
 }
 
-fn build_icmp_packet(buf: &mut [u8]) -> MutableEchoRequestPacket {
-    use pnet::packet::icmp::{checksum, IcmpCode};
+async fn receiver(tx: Sender<Message>, semaphore: Arc<Semaphore>) -> Result<(), std::io::Error> {
+    let mut buf = [0u8; 1024];
+    let sock = RawSocket::new(Domain::ipv4(), Type::raw(), Protocol::icmpv4().into()).unwrap();
 
-    let mut packet = MutableEchoRequestPacket::new(buf).unwrap();
-    let seq_no = rand::random::<u16>();
+    loop {
+        let (_bytes_received, ip_addr) = sock.recv_from(&mut buf).await?;
+        let packet = IcmpPacket::new(&buf[IP_HDR_LEN..]).unwrap();
 
-    packet.set_icmp_type(IcmpTypes::EchoRequest);
-    packet.set_icmp_code(IcmpCode::new(0));
-    packet.set_sequence_number(seq_no);
-    packet.set_identifier(0x1337);
-    packet.set_checksum(checksum(&IcmpPacket::new(&packet.packet()).unwrap()));
+        let reverse_dns_task = tokio::task::spawn_blocking(move || {
+            dns_lookup::lookup_addr(&ip_addr.clone().ip()).unwrap()
+        });
+        let hostname = reverse_dns_task.await.unwrap();
 
-    packet
+        let info = Info {
+            hostname: Some(hostname),
+            ip_addr: Some(ip_addr),
+            ttl: None,
+            mtu: None,
+        };
+
+        tx.send(Message::Some(info)).await.unwrap();
+
+        match packet.get_icmp_type() {
+            IcmpTypes::TimeExceeded => semaphore.add_permits(1),
+            IcmpTypes::EchoReply | IcmpTypes::DestinationUnreachable => {
+                tx.send(Message::None).await.unwrap();
+                break;
+            }
+            _ => {}
+        }
+    }
+
+    Ok(())
 }
 
 async fn printer(mut rx: Receiver<Message>) {
@@ -287,6 +248,45 @@ fn build_ipv4_packet(buf: &mut [u8], dest: String, size: u16, ttl: u8) -> Mutabl
     packet.set_checksum(pnet::packet::ipv4::checksum(&packet.to_immutable()));
 
     packet
+}
+
+fn build_icmp_packet(buf: &mut [u8]) -> MutableEchoRequestPacket {
+    use pnet::packet::icmp::{checksum, IcmpCode};
+
+    let mut packet = MutableEchoRequestPacket::new(buf).unwrap();
+    let seq_no = rand::random::<u16>();
+
+    packet.set_icmp_type(IcmpTypes::EchoRequest);
+    packet.set_icmp_code(IcmpCode::new(0));
+    packet.set_sequence_number(seq_no);
+    packet.set_identifier(0x1337);
+    packet.set_checksum(checksum(&IcmpPacket::new(&packet.packet()).unwrap()));
+
+    packet
+}
+
+#[derive(StructOpt)]
+struct Opt {
+    target: String,
+    protocol: Option<String>,
+    #[structopt(long)]
+    pmtud: bool,
+}
+
+#[derive(Clone, Copy)]
+enum TracerouteProtocol {
+    Udp,
+    Icmp,
+}
+
+impl TracerouteProtocol {
+    fn from_str(protocol: &str) -> Self {
+        match protocol {
+            "udp" => Self::Udp,
+            "icmp" => Self::Icmp,
+            _ => unreachable!(),
+        }
+    }
 }
 
 #[derive(Debug)]
