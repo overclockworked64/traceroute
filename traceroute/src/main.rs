@@ -4,21 +4,28 @@ use pnet::packet::{
         {IcmpPacket, IcmpTypes}
     },
     ipv4::MutableIpv4Packet,
+    Packet,
 };
-use pnet::packet::Packet;
 use raw_socket::{
     ffi::c_int,
     tokio::RawSocket,
     option::{Level, Name},
     {Domain, Protocol, Type},
 };
-use std::sync::Arc;
-use std::collections::HashMap;
-use std::net::{SocketAddr, Ipv4Addr};
+use std::{
+    sync::Arc,
+    collections::HashMap,
+    net::{SocketAddr, Ipv4Addr}
+};
 use structopt::StructOpt;
-use tokio::net::UdpSocket;
-use tokio::sync::{Mutex, Semaphore};
-use tokio::sync::mpsc::{Sender, Receiver};
+use tokio::{
+    net::UdpSocket,
+    sync::{
+        Mutex, Semaphore,
+        mpsc::{Sender, Receiver},
+    }
+};
+
 
 const IP_HDR_LEN: usize = 20;
 const ICMP_HDR_LEN: usize = 8;
