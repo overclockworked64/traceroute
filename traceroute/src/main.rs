@@ -13,6 +13,7 @@ use raw_socket::{
     {Domain, Protocol, Type},
 };
 use std::sync::Arc;
+use std::collections::HashMap;
 use std::net::{SocketAddr, Ipv4Addr};
 use structopt::StructOpt;
 use tokio::net::UdpSocket;
@@ -169,7 +170,7 @@ async fn path_mtu_discovery(tx: Sender<Message>, target: String, mut mtu: u16, t
     sock.connect((target.clone(), 0)).await.unwrap();
   
     let mut buf = vec![rand::random::<u8>(); mtu as usize];
-    let ipv4_packet = build_ipv4_packet(&mut buf, target.clone(), mtu);
+    let ipv4_packet = build_ipv4_packet(&mut buf, target.clone(), mtu, ttl);
 
     sock.set_sockopt(Level::IPV4, Name::IP_TTL, &(ttl as c_int + 1))
         .unwrap();
@@ -212,7 +213,7 @@ fn build_icmp_packet(buf: &mut [u8]) -> MutableEchoRequestPacket {
 
 async fn printer(mut rx: Receiver<Message>) {
     let mut data = vec![];
-    let mut mtus = vec![];
+    let mut mtus = HashMap::new();
 
     loop {
         if let Some(message) = rx.recv().await {
@@ -221,7 +222,7 @@ async fn printer(mut rx: Receiver<Message>) {
                     if info.mtu.is_none() {
                         data.push((info.ip_addr, info.hostname, info.mtu));
                     } else {
-                        mtus.push((info.ttl, info.mtu));
+                        mtus.insert(info.ttl, info.mtu);
                     }
                 },
                 Message::None => break,
@@ -242,12 +243,12 @@ async fn printer(mut rx: Receiver<Message>) {
 }
 
 
-fn build_ipv4_packet(buf: &mut [u8], dest: String, size: u16) -> MutableIpv4Packet {
+fn build_ipv4_packet(buf: &mut [u8], dest: String, size: u16, ttl: u8) -> MutableIpv4Packet {
     use pnet::packet::ipv4::Ipv4Flags;
 
     let mut packet = MutableIpv4Packet::new(buf).unwrap();
     packet.set_version(4);
-    packet.set_ttl(255);
+    packet.set_ttl(ttl);
     packet.set_header_length(5);
     packet.set_identification(0x1337);
     packet.set_source("192.168.1.64".parse::<Ipv4Addr>().unwrap());
