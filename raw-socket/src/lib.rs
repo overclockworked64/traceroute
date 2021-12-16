@@ -3,8 +3,8 @@
 pub use crate::socket::RawSocket;
 
 pub use socket2::Domain;
-pub use socket2::Type;
 pub use socket2::Protocol;
+pub use socket2::Type;
 
 pub mod control;
 pub mod ffi;
@@ -18,23 +18,26 @@ pub mod tokio;
 
 #[cfg(test)]
 mod test {
+    use crate::option::{Level, Name};
+    use crate::{Domain, RawSocket, Type};
+    use libc::{c_int, SOCK_DGRAM, SOCK_STREAM};
     use std::io::{Error, ErrorKind, IoSlice, IoSliceMut, Result};
     use std::net::{IpAddr, SocketAddr};
     use std::thread::sleep;
     use std::time::Duration;
-    use libc::{c_int, SOCK_DGRAM, SOCK_STREAM};
-    use crate::{RawSocket, Domain, Type};
-    use crate::option::{Level, Name};
 
     #[test]
     fn get_sockopt() -> Result<()> {
-        let ipv4  = Domain::ipv4();
+        let ipv4 = Domain::ipv4();
 
-        let sock0 = RawSocket::new(ipv4, Type::dgram(),  None)?;
+        let sock0 = RawSocket::new(ipv4, Type::dgram(), None)?;
         let sock1 = RawSocket::new(ipv4, Type::stream(), None)?;
 
-        assert_eq!(SOCK_DGRAM,  sock0.get_sockopt(Level::SOCKET, Name::SO_TYPE)?);
-        assert_eq!(SOCK_STREAM, sock1.get_sockopt(Level::SOCKET, Name::SO_TYPE)?);
+        assert_eq!(SOCK_DGRAM, sock0.get_sockopt(Level::SOCKET, Name::SO_TYPE)?);
+        assert_eq!(
+            SOCK_STREAM,
+            sock1.get_sockopt(Level::SOCKET, Name::SO_TYPE)?
+        );
 
         Ok(())
     }
@@ -42,7 +45,7 @@ mod test {
     #[test]
     fn set_sockopt() -> Result<()> {
         let level = Level::SOCKET;
-        let name  = Name::SO_KEEPALIVE;
+        let name = Name::SO_KEEPALIVE;
 
         let sock = RawSocket::new(Domain::ipv4(), Type::stream(), None)?;
 
@@ -84,9 +87,9 @@ mod test {
             let is_wb = |e: &Error| e.kind() == ErrorKind::WouldBlock;
 
             match recv.recv_msg(iovec, &mut []) {
-                Ok((n, from))          => break (n, from),
+                Ok((n, from)) => break (n, from),
                 Err(ref e) if is_wb(e) => sleep(delay),
-                Err(e)                 => return Err(e),
+                Err(e) => return Err(e),
             }
         };
 

@@ -2,8 +2,8 @@
 
 use libc::c_int;
 
-pub const IPV6_CHECKSUM:     c_int = 26;
+pub const IPV6_CHECKSUM: c_int = 26;
 pub const IPV6_RECVHOPLIMIT: c_int = 37;
-pub const IPV6_HOPLIMIT:     c_int = 47;
-pub const IPV6_RECVPATHMTU:  c_int = 43;
-pub const IPV6_PATHMTU:      c_int = 44;
+pub const IPV6_HOPLIMIT: c_int = 47;
+pub const IPV6_RECVPATHMTU: c_int = 43;
+pub const IPV6_PATHMTU: c_int = 44;

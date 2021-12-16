@@ -9,17 +9,17 @@ pub use libc::in6_pktinfo;
 pub use libc::msghdr;
 
 pub use libc::CMSG_DATA;
-pub use libc::CMSG_LEN;
-pub use libc::CMSG_SPACE;
 pub use libc::CMSG_FIRSTHDR;
+pub use libc::CMSG_LEN;
 pub use libc::CMSG_NXTHDR;
+pub use libc::CMSG_SPACE;
 
 pub use libc::IPPROTO_IP;
 pub use libc::IPPROTO_IPV6;
 
-pub use libc::IP_HDRINCL;
 pub use libc::IPV6_PKTINFO;
 pub use libc::IPV6_RECVPKTINFO;
+pub use libc::IP_HDRINCL;
 
 pub use libc::SOL_SOCKET;
 
@@ -39,10 +39,6 @@ mod sys;
 #[path = "macos.rs"]
 mod sys;
 
-#[cfg(not(any(
-    target_os = "freebsd",
-    target_os = "linux",
-    target_os = "macos",
-)))]
+#[cfg(not(any(target_os = "freebsd", target_os = "linux", target_os = "macos",)))]
 #[path = "other.rs"]
 mod sys;
