@@ -2,6 +2,8 @@
 
 use libc::{self, c_int};
 use crate::ffi;
+use std::ffi::CString;
+
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[repr(transparent)]
@@ -22,6 +24,7 @@ impl Level {
 pub struct Name(c_int);
 
 impl Name {
+    pub const IP_TTL:            Name = Name(ffi::IP_TTL);
     pub const IP_MTU:            Name = Name(ffi::IP_MTU);
     pub const IPV4_HDRINCL:      Name = Name(ffi::IP_HDRINCL);
     pub const IPV6_CHECKSUM:     Name = Name(ffi::IPV6_CHECKSUM);
@@ -40,6 +43,8 @@ impl Name {
     }
 }
 
-pub unsafe trait Opt: Copy + Default {}
+pub unsafe trait Opt: Clone + Default {}
 
 unsafe impl Opt for c_int {}
+
+unsafe impl Opt for CString {}

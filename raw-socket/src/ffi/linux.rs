@@ -2,6 +2,7 @@
 
 use libc::c_int;
 
+pub const IP_TTL:            c_int = libc::IP_TTL;
 pub const IP_MTU:            c_int = libc::IP_MTU;
 pub const IPV6_CHECKSUM:     c_int = libc::IPV6_CHECKSUM;
 pub const IPV6_RECVHOPLIMIT: c_int = 51;
