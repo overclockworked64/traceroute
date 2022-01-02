@@ -1,7 +1,8 @@
+use itertools::Itertools;
 use pnet::packet::{
     icmp::{
         echo_request::MutableEchoRequestPacket,
-        {IcmpPacket, IcmpTypes},
+        IcmpCode, {IcmpPacket, IcmpTypes},
     },
     ipv4::MutableIpv4Packet,
     Packet,
@@ -21,7 +22,7 @@ use structopt::StructOpt;
 use tokio::{
     net::UdpSocket,
     sync::{
-        mpsc::{Receiver, Sender},
+        mpsc::{error::TryRecvError, Receiver},
         Mutex, Semaphore,
     },
 };
@@ -32,29 +33,36 @@ const EMSGSIZE: i32 = 90;
 
 #[tokio::main]
 async fn main() -> Result<(), std::io::Error> {
-    let opt = Opt::from_args();
+    let options = Opt::from_args();
 
-    let target = opt.target;
-    let protocol = TracerouteProtocol::from_str(&opt.protocol.unwrap_or("udp".to_string()));
-    let pmtud = Arc::new(Mutex::new(opt.pmtud));
+    let target = options.target;
+    let protocol =
+        TracerouteProtocol::from_str(&options.protocol.unwrap_or_else(|| "udp".to_string()));
+    let pmtud = Arc::new(Mutex::new(options.pmtud));
 
     let semaphore = Arc::new(Semaphore::new(4));
-    let counter_mutex = Arc::new(Mutex::new(0u8));
+    let ttl_mutex = Arc::new(Mutex::new(0u8));
+    let mtu_mutex = Arc::new(Mutex::new(65535));
+    let packets_recvd_mutex = Arc::new(Mutex::new(0));
+
+    let mut recv_buf = [0u8; 1024];
+    let recv_sock =
+        Arc::new(RawSocket::new(Domain::ipv4(), Type::raw(), Protocol::icmpv4().into()).unwrap());
 
     let (tx, rx) = tokio::sync::mpsc::channel(1024);
 
+    let printer = tokio::spawn(printer(rx));
     let mut tasks = vec![];
-    let recv_task = tokio::spawn(receiver(tx.clone(), Arc::clone(&semaphore)));
-    let _printer_task = tokio::spawn(printer(rx));
 
-    let mtu = 65535;
-
-    for task in 0..255 {
+    for _ in 0..255 {
+        let tx = tx.clone();
         let target = target.clone();
         let semaphore = Arc::clone(&semaphore);
-        let counter_mutex = Arc::clone(&counter_mutex);
-        let tx = tx.clone();
+        let counter_mutex = Arc::clone(&ttl_mutex);
+        let mtu_mutex = Arc::clone(&mtu_mutex);
+        let packets_recvd_mutex = Arc::clone(&packets_recvd_mutex);
         let pmtud = Arc::clone(&pmtud);
+        let recv_sock = Arc::clone(&recv_sock);
 
         tasks.push(tokio::spawn(async move {
             if let Ok(permit) = semaphore.clone().acquire().await {
@@ -65,171 +73,167 @@ async fn main() -> Result<(), std::io::Error> {
                 };
 
                 match protocol {
-                    TracerouteProtocol::Udp => {
-                        let sock = UdpSocket::bind(format!("192.168.1.64:{}", 8000 + task))
-                            .await
-                            .unwrap();
+                    TracerouteProtocol::Udp => trace_udp(&target, ttl).await,
+                    TracerouteProtocol::Icmp => trace_icmp(&target, ttl).await,
+                }
 
-                        sock.set_ttl(ttl as u32).unwrap();
-                        sock.send_to(&[], (target, 33434)).await.unwrap();
+                let path_maximum_transmission_unit_discovery = {
+                    let guard = pmtud.lock().await;
+
+                    *guard
+                };
+
+                let mtu = if path_maximum_transmission_unit_discovery {
+                    path_mtu_discovery(target, Arc::clone(&mtu_mutex), ttl, Arc::clone(&pmtud))
+                        .await
+                } else {
+                    0
+                };
+
+                let (_bytes_received, ip_addr) = recv_sock.recv_from(&mut recv_buf).await.unwrap();
+
+                let mut packet_no = packets_recvd_mutex.lock().await;
+                *packet_no += 1;
+
+                let packet = IcmpPacket::new(&recv_buf[IP_HDR_LEN..]).unwrap();
+
+                let reverse_dns_task = tokio::task::spawn_blocking(move || {
+                    dns_lookup::lookup_addr(&ip_addr.clone().ip()).unwrap()
+                });
+                let hostname = reverse_dns_task.await.unwrap();
+
+                let info = Info {
+                    hostname,
+                    ip_addr,
+                    mtu,
+                    ttl: *packet_no,
+                };
+
+                tx.send(Message::Some(info)).await.unwrap();
+
+                match packet.get_icmp_type() {
+                    IcmpTypes::TimeExceeded => semaphore.add_permits(1),
+                    IcmpTypes::EchoReply | IcmpTypes::DestinationUnreachable => {
+                        tx.send(Message::None).await.unwrap()
                     }
-                    TracerouteProtocol::Icmp => {
-                        let sock =
-                            RawSocket::new(Domain::ipv4(), Type::raw(), Protocol::icmpv4().into())
-                                .unwrap();
-
-                        let mut buf = [0u8; ICMP_HDR_LEN];
-                        let icmp_packet = build_icmp_packet(&mut buf);
-
-                        sock.set_sockopt(Level::IPV4, Name::IP_TTL, &(ttl as c_int))
-                            .unwrap();
-                        sock.send_to(icmp_packet.packet(), (target.clone(), 0))
-                            .await
-                            .unwrap();
-
-                        let path_maximum_transmission_unit_discovery = {
-                            let guard = pmtud.lock().await;
-
-                            *guard
-                        };
-
-                        if path_maximum_transmission_unit_discovery {
-                            tokio::spawn(path_mtu_discovery(
-                                tx.clone(),
-                                target,
-                                mtu,
-                                ttl,
-                                Arc::clone(&pmtud),
-                            ));
-                        }
-                    }
+                    _ => {}
                 }
 
                 permit.forget();
             }
-        }));
+        }))
     }
 
-    if let Ok(_) = recv_task.await {
+    if printer.await.is_ok() {
         semaphore.close();
     }
 
     Ok(())
 }
 
-async fn path_mtu_discovery(
-    tx: Sender<Message>,
-    target: String,
-    mut mtu: u16,
-    ttl: u8,
-    pmtud: Arc<Mutex<bool>>,
-) {
-    let sock = RawSocket::new(Domain::ipv4(), Type::raw(), Protocol::from(255).into()).unwrap();
+async fn trace_udp(target: &str, ttl: u8) {
+    let sock = UdpSocket::bind("192.168.1.64:8000").await.unwrap();
 
-    sock.set_sockopt(Level::IPV4, Name::IPV4_HDRINCL, &(1 as c_int))
-        .unwrap();
-    sock.connect((target.clone(), 0)).await.unwrap();
-
-    let mut buf = vec![rand::random::<u8>(); mtu as usize];
-    let ipv4_packet = build_ipv4_packet(&mut buf, target.clone(), mtu, ttl);
-
-    sock.set_sockopt(Level::IPV4, Name::IP_TTL, &(ttl as c_int + 1))
-        .unwrap();
-
-    if let Err(e) = sock
-        .send_to(ipv4_packet.packet(), (target.clone(), 0))
-        .await
-    {
-        if let Some(code) = e.raw_os_error() {
-            if code == EMSGSIZE {
-                mtu = sock
-                    .get_sockopt::<c_int>(Level::IPV4, Name::IP_MTU)
-                    .unwrap() as u16;
-
-                let message = Info {
-                    hostname: None,
-                    ip_addr: None,
-                    ttl: Some(ttl),
-                    mtu: Some(mtu),
-                };
-
-                tx.send(Message::Some(message)).await.unwrap();
-            }
-        }
-    } else {
-        let mut guard = pmtud.lock().await;
-        *guard = false;
-    }
+    sock.set_ttl(ttl as u32).unwrap();
+    sock.send_to(&[], (target, 33434)).await.unwrap();
 }
 
-async fn receiver(tx: Sender<Message>, semaphore: Arc<Semaphore>) -> Result<(), std::io::Error> {
-    let mut buf = [0u8; 1024];
+async fn trace_icmp(target: &str, ttl: u8) {
     let sock = RawSocket::new(Domain::ipv4(), Type::raw(), Protocol::icmpv4().into()).unwrap();
 
-    loop {
-        let (_bytes_received, ip_addr) = sock.recv_from(&mut buf).await?;
-        let packet = IcmpPacket::new(&buf[IP_HDR_LEN..]).unwrap();
+    let mut buf = [0u8; ICMP_HDR_LEN];
+    let icmp_packet = build_icmp_packet(&mut buf);
 
-        let reverse_dns_task = tokio::task::spawn_blocking(move || {
-            dns_lookup::lookup_addr(&ip_addr.clone().ip()).unwrap()
-        });
-        let hostname = reverse_dns_task.await.unwrap();
+    sock.set_sockopt(Level::IPV4, Name::IP_TTL, &(ttl as c_int))
+        .unwrap();
+    sock.send_to(icmp_packet.packet(), (target, 0))
+        .await
+        .unwrap();
+}
 
-        let info = Info {
-            hostname: Some(hostname),
-            ip_addr: Some(ip_addr),
-            ttl: None,
-            mtu: None,
-        };
+async fn printer(mut rx: Receiver<Message>) -> Result<(), std::io::Error> {
+    let mut data = HashMap::new();
 
-        tx.send(Message::Some(info)).await.unwrap();
+    'driver: loop {
+        match rx.try_recv() {
+            Ok(message) => match message {
+                Message::Some(info) => {
+                    data.insert(info.ttl, (info.hostname, info.ip_addr, info.mtu));
+                }
+                Message::None => {
+                    let last_msg = data.keys().max().copied().unwrap();
 
-        match packet.get_icmp_type() {
-            IcmpTypes::TimeExceeded => semaphore.add_permits(1),
-            IcmpTypes::EchoReply | IcmpTypes::DestinationUnreachable => {
-                tx.send(Message::None).await.unwrap();
-                break;
-            }
-            _ => {}
+                    for msg in 1..last_msg + 1 {
+                        match data.get(&msg) {
+                            Some(_) => {}
+                            None => continue 'driver,
+                        }
+                    }
+
+                    break;
+                }
+            },
+            Err(e) => match e {
+                TryRecvError::Empty => continue,
+                TryRecvError::Disconnected => break,
+            },
+        }
+    }
+
+    let mut printed_ip_addrs = vec![];
+
+    for ttl in data.keys().sorted() {
+        let (hostname, ip_addr, mtu) = data.get(ttl).unwrap();
+        if !printed_ip_addrs.contains(ip_addr) {
+            printed_ip_addrs.push(*ip_addr);
+
+            println!("{}: {} ({:?}) pmtu: {}", ttl, hostname, ip_addr, mtu);
         }
     }
 
     Ok(())
 }
 
-async fn printer(mut rx: Receiver<Message>) {
-    let mut data = vec![];
-    let mut mtus = HashMap::new();
+async fn path_mtu_discovery(
+    target: String,
+    mtu_mutex: Arc<Mutex<u16>>,
+    ttl: u8,
+    pmtud: Arc<Mutex<bool>>,
+) -> u16 {
+    let sock = RawSocket::new(Domain::ipv4(), Type::raw(), Protocol::from(255).into()).unwrap();
 
-    loop {
-        if let Some(message) = rx.recv().await {
-            match message {
-                Message::Some(info) => {
-                    if info.mtu.is_none() {
-                        data.push((info.ip_addr, info.hostname, info.mtu));
-                    } else {
-                        mtus.insert(info.ttl, info.mtu);
-                    }
+    sock.set_sockopt(Level::IPV4, Name::IPV4_HDRINCL, &(1i32))
+        .unwrap();
+    sock.connect((target.clone(), 0)).await.unwrap();
+
+    let mut mtu = mtu_mutex.lock().await;
+
+    let mut buf = vec![rand::random::<u8>(); *mtu as usize];
+    let ipv4_packet = build_ipv4_packet(&mut buf, target.clone(), *mtu, ttl);
+
+    sock.set_sockopt(Level::IPV4, Name::IP_TTL, &(ttl as c_int + 1))
+        .unwrap();
+
+    match sock
+        .send_to(ipv4_packet.packet(), (target.clone(), 0))
+        .await
+    {
+        Ok(_) => {
+            let mut path_maximum_transmission_unit_discovery = pmtud.lock().await;
+            *path_maximum_transmission_unit_discovery = false;
+        }
+        Err(e) => {
+            if let Some(code) = e.raw_os_error() {
+                if code == EMSGSIZE {
+                    *mtu = sock
+                        .get_sockopt::<c_int>(Level::IPV4, Name::IP_MTU)
+                        .unwrap() as u16;
                 }
-                Message::None => break,
             }
         }
     }
 
-    for (ttl, mtu) in mtus {
-        if let Some(datum) = data.get_mut(ttl.unwrap() as usize - 1) {
-            datum.2 = mtu;
-        }
-    }
-
-    for (ip_addr, hostname, mtu) in data {
-        println!(
-            "{} ({:?}) pmtu {}",
-            hostname.unwrap(),
-            ip_addr.unwrap(),
-            mtu.unwrap()
-        );
-    }
+    *mtu
 }
 
 fn build_ipv4_packet(buf: &mut [u8], dest: String, size: u16, ttl: u8) -> MutableIpv4Packet {
@@ -251,7 +255,7 @@ fn build_ipv4_packet(buf: &mut [u8], dest: String, size: u16, ttl: u8) -> Mutabl
 }
 
 fn build_icmp_packet(buf: &mut [u8]) -> MutableEchoRequestPacket {
-    use pnet::packet::icmp::{checksum, IcmpCode};
+    use pnet::packet::icmp::checksum;
 
     let mut packet = MutableEchoRequestPacket::new(buf).unwrap();
     let seq_no = rand::random::<u16>();
@@ -260,7 +264,7 @@ fn build_icmp_packet(buf: &mut [u8]) -> MutableEchoRequestPacket {
     packet.set_icmp_code(IcmpCode::new(0));
     packet.set_sequence_number(seq_no);
     packet.set_identifier(0x1337);
-    packet.set_checksum(checksum(&IcmpPacket::new(&packet.packet()).unwrap()));
+    packet.set_checksum(checksum(&IcmpPacket::new(packet.packet()).unwrap()));
 
     packet
 }
@@ -297,8 +301,8 @@ enum Message {
 
 #[derive(Debug)]
 struct Info {
-    hostname: Option<String>,
-    ip_addr: Option<SocketAddr>,
-    ttl: Option<u8>,
-    mtu: Option<u16>,
+    hostname: String,
+    ip_addr: SocketAddr,
+    mtu: u16,
+    ttl: u8,
 }

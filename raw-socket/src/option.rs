@@ -23,6 +23,7 @@ impl Level {
 pub struct Name(c_int);
 
 impl Name {
+    pub const IP_PKTINFO: Name = Name(ffi::IP_PKTINFO);
     pub const IP_TTL: Name = Name(ffi::IP_TTL);
     pub const IP_MTU: Name = Name(ffi::IP_MTU);
     pub const IPV4_HDRINCL: Name = Name(ffi::IP_HDRINCL);

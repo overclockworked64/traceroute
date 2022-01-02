@@ -83,6 +83,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "either"
+version = "1.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e78d4f1cc4ae33bbfc157ed5d5a5ef3bc29227303d595861deb238fcec4e9457"
+
+[[package]]
 name = "getrandom"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -133,6 +139,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4088d739b183546b239688ddbc79891831df421773df95e236daf7867866d355"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "itertools"
+version = "0.10.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a9a9d19fa1e79b6215ff29b9d6880b706147f16e9b1dbb1e4e5947b5b02bc5e3"
+dependencies = [
+ "either",
 ]
 
 [[package]]
@@ -594,6 +609,7 @@ name = "traceroute"
 version = "0.1.0"
 dependencies = [
  "dns-lookup",
+ "itertools",
  "pnet",
  "rand",
  "raw-socket",
