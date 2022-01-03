@@ -51,8 +51,9 @@ async fn main() -> Result<(), std::io::Error> {
 
     let (tx, rx) = tokio::sync::mpsc::channel(1024);
 
-    let printer = tokio::spawn(printer(rx));
     let mut tasks = vec![];
+
+    let printer = tokio::task::spawn_blocking(move || printer(rx));
 
     for _ in 0..255 {
         let tx = tx.clone();
@@ -109,21 +110,21 @@ async fn main() -> Result<(), std::io::Error> {
                     ttl: *packet_no,
                 };
 
-                tx.send(Message::Some(info)).await.unwrap();
+                if tx.send(Message::Some(info)).await.is_err() {
+                    return;
+                } 
 
                 match packet.get_icmp_type() {
                     IcmpTypes::TimeExceeded => semaphore.add_permits(1),
-                    IcmpTypes::EchoReply | IcmpTypes::DestinationUnreachable => {
-                        tx.send(Message::None).await.unwrap()
-                    }
+                    IcmpTypes::EchoReply | IcmpTypes::DestinationUnreachable => tx.send(Message::None).await.unwrap(),
                     _ => {}
                 }
 
                 permit.forget();
             }
-        }))
+        }));
     }
-
+   
     if printer.await.is_ok() {
         semaphore.close();
     }
@@ -134,7 +135,7 @@ async fn main() -> Result<(), std::io::Error> {
 async fn trace_udp(target: &str, ttl: u8) {
     let sock = UdpSocket::bind("192.168.1.64:8000").await.unwrap();
 
-    sock.set_ttl(ttl as u32).unwrap();
+    sock.set_ttl(u32::from(ttl)).unwrap();
     sock.send_to(&[], (target, 33434)).await.unwrap();
 }
 
@@ -144,14 +145,14 @@ async fn trace_icmp(target: &str, ttl: u8) {
     let mut buf = [0u8; ICMP_HDR_LEN];
     let icmp_packet = build_icmp_packet(&mut buf);
 
-    sock.set_sockopt(Level::IPV4, Name::IP_TTL, &(ttl as c_int))
+    sock.set_sockopt(Level::IPV4, Name::IP_TTL, &i32::from(ttl))
         .unwrap();
     sock.send_to(icmp_packet.packet(), (target, 0))
         .await
         .unwrap();
 }
 
-async fn printer(mut rx: Receiver<Message>) -> Result<(), std::io::Error> {
+fn printer(mut rx: Receiver<Message>) {
     let mut data = HashMap::new();
 
     'driver: loop {
@@ -163,7 +164,7 @@ async fn printer(mut rx: Receiver<Message>) -> Result<(), std::io::Error> {
                 Message::None => {
                     let last_msg = data.keys().max().copied().unwrap();
 
-                    for msg in 1..last_msg + 1 {
+                    for msg in 1..=last_msg {
                         match data.get(&msg) {
                             Some(_) => {}
                             None => continue 'driver,
@@ -190,8 +191,6 @@ async fn printer(mut rx: Receiver<Message>) -> Result<(), std::io::Error> {
             println!("{}: {} ({:?}) pmtu: {}", ttl, hostname, ip_addr, mtu);
         }
     }
-
-    Ok(())
 }
 
 async fn path_mtu_discovery(
@@ -209,9 +208,9 @@ async fn path_mtu_discovery(
     let mut mtu = mtu_mutex.lock().await;
 
     let mut buf = vec![rand::random::<u8>(); *mtu as usize];
-    let ipv4_packet = build_ipv4_packet(&mut buf, target.clone(), *mtu, ttl);
+    let ipv4_packet = build_ipv4_packet(&mut buf, target.parse::<Ipv4Addr>().unwrap(), *mtu, ttl);
 
-    sock.set_sockopt(Level::IPV4, Name::IP_TTL, &(ttl as c_int + 1))
+    sock.set_sockopt(Level::IPV4, Name::IP_TTL, &(i32::from(ttl) + 1))
         .unwrap();
 
     match sock
@@ -236,7 +235,7 @@ async fn path_mtu_discovery(
     *mtu
 }
 
-fn build_ipv4_packet(buf: &mut [u8], dest: String, size: u16, ttl: u8) -> MutableIpv4Packet {
+fn build_ipv4_packet(buf: &mut [u8], dest: Ipv4Addr, size: u16, ttl: u8) -> MutableIpv4Packet {
     use pnet::packet::ipv4::Ipv4Flags;
 
     let mut packet = MutableIpv4Packet::new(buf).unwrap();
@@ -245,7 +244,7 @@ fn build_ipv4_packet(buf: &mut [u8], dest: String, size: u16, ttl: u8) -> Mutabl
     packet.set_header_length(5);
     packet.set_identification(0x1337);
     packet.set_source("192.168.1.64".parse::<Ipv4Addr>().unwrap());
-    packet.set_destination(dest.parse::<Ipv4Addr>().unwrap());
+    packet.set_destination(dest);
     packet.set_flags(Ipv4Flags::DontFragment);
     packet.set_total_length(size);
     packet.set_payload(&vec![rand::random::<u8>(); size as usize - IP_HDR_LEN]);
