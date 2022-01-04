@@ -98,14 +98,19 @@ async fn main() -> Result<(), std::io::Error> {
 
                 match icmp_packet.get_icmp_type() {
                     IcmpTypes::TimeExceeded => {
+                        /* A part of the original IPv4 packet (header + at least first 8 bytes)
+                         * is contained in an ICMP error message. We use the identification field
+                         * to map responses back to correct hops.
+                         */
                         let original_ipv4_packet =
                             Ipv4Packet::new(&recv_buf[IP_HDR_LEN + ICMP_HDR_LEN..]).unwrap();
 
-                        let packet_no = original_ipv4_packet.get_identification();
+                        let hop = original_ipv4_packet.get_identification();
 
                         let mut data = data.lock().await;
-                        data.insert(packet_no, (ip_addr, hostname, mtu));
+                        data.insert(hop, (ip_addr, hostname, mtu));
 
+                        /* Allow one more task to go through.  */
                         semaphore.add_permits(1);
                     }
                     IcmpTypes::EchoReply => {
@@ -131,13 +136,20 @@ async fn main() -> Result<(), std::io::Error> {
     for (i, hop) in data.keys().sorted().enumerate() {
         let (ip_addr, hostname, mtu) = data.get(hop).unwrap();
         
+        /* Print hop, hostname, and ip_addr.  */
         print!("hop: {} - {} ({:?})", i + 1, hostname, ip_addr);
         
         if mtu.is_none() {
+            /* We have no MTU information for this hop, so print a line feed.  */
             print!("\n");
         } else {
+            /* We have MTU information for this hop. */
             if let Some(previous_hop) = data.get(&(hop-1)) {
+                /* If we have MTU information for previous hop...  */
                 if let Some(previous_mtu) = previous_hop.2 {
+                    /* If previous MTU is the same as current, print a line feed,
+                     * otherwise, print MTU information as well.
+                     */
                     if previous_mtu == mtu.unwrap() {
                         print!("\n")
                     } else {
@@ -145,6 +157,7 @@ async fn main() -> Result<(), std::io::Error> {
                     }
                 }
             } else {
+                /* We don't have MTU information for this hop.  */
                 print!(" - pmtu: {}\n", mtu.unwrap());
             }
         }
@@ -233,7 +246,11 @@ fn build_ipv4_packet(buf: &mut [u8], dest: Ipv4Addr, size: u16, ttl: u8) -> Muta
     let mut packet = MutableIpv4Packet::new(buf).unwrap();
     packet.set_version(4);
     packet.set_ttl(ttl);
-    packet.set_header_length(5);
+    packet.set_header_length(5);  /* In bytes.  */
+
+    /* We are setting the identification field to the TTL 
+     * that we later use to map responses back to correct hops
+     */
     packet.set_identification(ttl as u16);
     packet.set_next_level_protocol(IpNextHeaderProtocols::Icmp);
     packet.set_source("192.168.1.64".parse::<Ipv4Addr>().unwrap());
