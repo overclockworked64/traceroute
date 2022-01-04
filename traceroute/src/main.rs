@@ -13,11 +13,7 @@ use raw_socket::{
     tokio::RawSocket,
     {Domain, Protocol, Type},
 };
-use std::{
-    collections::HashMap,
-    net::Ipv4Addr,
-    sync::Arc,
-};
+use std::{collections::HashMap, net::Ipv4Addr, sync::Arc};
 use structopt::StructOpt;
 use tokio::{
     net::UdpSocket,
@@ -77,11 +73,18 @@ async fn main() -> Result<(), std::io::Error> {
                     *guard
                 };
 
-                let mtu = if path_maximum_transmission_unit_discovery {
-                    path_mtu_discovery(&target, Arc::clone(&mtu_mutex), ttl, Arc::clone(&pmtud))
-                        .await
+                let mtu: Option<u16> = if path_maximum_transmission_unit_discovery {
+                    Some(
+                        path_mtu_discovery(
+                            &target,
+                            Arc::clone(&mtu_mutex),
+                            ttl,
+                            Arc::clone(&pmtud),
+                        )
+                        .await,
+                    )
                 } else {
-                    0
+                    None
                 };
 
                 let (_bytes_received, ip_addr) = recv_sock.recv_from(&mut recv_buf).await.unwrap();
@@ -126,14 +129,35 @@ async fn main() -> Result<(), std::io::Error> {
     let data = data.lock().await;
 
     for (i, hop) in data.keys().sorted().enumerate() {
-        let (ip_addr, hostname, mtu) = data.get(&hop).unwrap();
-        println!(
-            "hop: {} - {} ({:?}) - pmtu: {}",
-            i + 1,
-            hostname,
-            ip_addr,
-            mtu
-        );
+        let (ip_addr, hostname, mtu) = data.get(hop).unwrap();
+        if mtu.is_none() {
+            println!("hop: {} - {} ({:?})", i + 1, hostname, ip_addr,);
+        } else {
+            match data.get(&(hop - 1)) {
+                Some(datum) => {
+                    if datum.2.unwrap() == mtu.unwrap() {
+                        println!("hop: {} - {} ({:?})", i + 1, hostname, ip_addr,);
+                    } else {
+                        println!(
+                            "hop: {} - {} ({:?}) - pmtu: {}",
+                            i + 1,
+                            hostname,
+                            ip_addr,
+                            mtu.unwrap(),
+                        );            
+                    }
+                }
+                None => {
+                    println!(
+                        "hop: {} - {} ({:?}) - pmtu: {}",
+                        i + 1,
+                        hostname,
+                        ip_addr,
+                        mtu.unwrap(),
+                    );
+                }
+            }
+        }
     }
 
     Ok(())
@@ -269,4 +293,3 @@ impl TracerouteProtocol {
         }
     }
 }
-
