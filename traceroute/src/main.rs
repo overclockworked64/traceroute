@@ -130,32 +130,22 @@ async fn main() -> Result<(), std::io::Error> {
 
     for (i, hop) in data.keys().sorted().enumerate() {
         let (ip_addr, hostname, mtu) = data.get(hop).unwrap();
+        
+        print!("hop: {} - {} ({:?})", i + 1, hostname, ip_addr);
+        
         if mtu.is_none() {
-            println!("hop: {} - {} ({:?})", i + 1, hostname, ip_addr,);
+            print!("\n");
         } else {
-            match data.get(&(hop - 1)) {
-                Some(datum) => {
-                    if datum.2.unwrap() == mtu.unwrap() {
-                        println!("hop: {} - {} ({:?})", i + 1, hostname, ip_addr,);
+            if let Some(previous_hop) = data.get(&(hop-1)) {
+                if let Some(previous_mtu) = previous_hop.2 {
+                    if previous_mtu == mtu.unwrap() {
+                        print!("\n")
                     } else {
-                        println!(
-                            "hop: {} - {} ({:?}) - pmtu: {}",
-                            i + 1,
-                            hostname,
-                            ip_addr,
-                            mtu.unwrap(),
-                        );            
+                        print!(" - pmtu: {}\n", mtu.unwrap());
                     }
                 }
-                None => {
-                    println!(
-                        "hop: {} - {} ({:?}) - pmtu: {}",
-                        i + 1,
-                        hostname,
-                        ip_addr,
-                        mtu.unwrap(),
-                    );
-                }
+            } else {
+                print!(" - pmtu: {}\n", mtu.unwrap());
             }
         }
     }
