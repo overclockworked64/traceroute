@@ -88,6 +88,11 @@ async fn main() -> Result<(), std::io::Error> {
 
                 let icmp_packet = IcmpPacket::new(&recv_buf[IP_HDR_LEN..]).unwrap();
 
+                let reverse_dns_task = tokio::task::spawn_blocking(move || {
+                    dns_lookup::lookup_addr(&ip_addr.clone().ip()).unwrap()
+                });
+                let hostname = reverse_dns_task.await.unwrap();
+
                 match icmp_packet.get_icmp_type() {
                     IcmpTypes::TimeExceeded => {
                         let original_ipv4_packet =
@@ -95,24 +100,13 @@ async fn main() -> Result<(), std::io::Error> {
 
                         let packet_no = original_ipv4_packet.get_identification();
 
-                        let reverse_dns_task = tokio::task::spawn_blocking(move || {
-                            dns_lookup::lookup_addr(&ip_addr.clone().ip()).unwrap()
-                        });
-                        let hostname = reverse_dns_task.await.unwrap();
-
                         let mut data = data.lock().await;
                         data.insert(packet_no, (ip_addr, hostname, mtu));
 
                         semaphore.add_permits(1);
                     }
                     IcmpTypes::EchoReply => {
-                        let reverse_dns_task = tokio::task::spawn_blocking(move || {
-                            dns_lookup::lookup_addr(&ip_addr.clone().ip()).unwrap()
-                        });
-                        let hostname = reverse_dns_task.await.unwrap();
-
                         let mut data = data.lock().await;
-
                         data.insert(255, (ip_addr, hostname, mtu));
 
                         semaphore.close();
@@ -131,11 +125,11 @@ async fn main() -> Result<(), std::io::Error> {
 
     let data = data.lock().await;
 
-    for (hop, _hop) in data.keys().sorted().enumerate() {
-        let (ip_addr, hostname, mtu) = data.get(&_hop).unwrap();
+    for (i, hop) in data.keys().sorted().enumerate() {
+        let (ip_addr, hostname, mtu) = data.get(&hop).unwrap();
         println!(
             "hop: {} - {} ({:?}) - pmtu: {}",
-            hop + 1,
+            i + 1,
             hostname,
             ip_addr,
             mtu
