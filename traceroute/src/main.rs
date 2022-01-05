@@ -31,7 +31,7 @@ async fn main() -> Result<(), std::io::Error> {
     let target = options.target.parse::<Ipv4Addr>().unwrap();
     let protocol =
         TracerouteProtocol::from_str(&options.protocol.unwrap_or_else(|| "udp".to_string()));
-    let pmtud = Arc::new(Mutex::new(options.pmtud));
+    let pmtud_mutex = Arc::new(Mutex::new(options.pmtud));
 
     let semaphore = Arc::new(Semaphore::new(4));
     let ttl_mutex = Arc::new(Mutex::new(0u8));
@@ -50,7 +50,7 @@ async fn main() -> Result<(), std::io::Error> {
         let semaphore = Arc::clone(&semaphore);
         let counter_mutex = Arc::clone(&ttl_mutex);
         let mtu_mutex = Arc::clone(&mtu_mutex);
-        let pmtud = Arc::clone(&pmtud);
+        let pmtud_mutex = Arc::clone(&pmtud_mutex);
         let recv_sock = Arc::clone(&recv_sock);
         let data = Arc::clone(&data);
 
@@ -68,7 +68,7 @@ async fn main() -> Result<(), std::io::Error> {
                 }
 
                 let path_maximum_transmission_unit_discovery = {
-                    let guard = pmtud.lock().await;
+                    let guard = pmtud_mutex.lock().await;
 
                     *guard
                 };
@@ -79,7 +79,7 @@ async fn main() -> Result<(), std::io::Error> {
                             &target,
                             Arc::clone(&mtu_mutex),
                             ttl,
-                            Arc::clone(&pmtud),
+                            Arc::clone(&pmtud_mutex),
                         )
                         .await,
                     )
