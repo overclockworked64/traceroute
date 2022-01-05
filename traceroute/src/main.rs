@@ -20,6 +20,9 @@ use tokio::{
     sync::{Mutex, Semaphore},
 };
 
+const START_MTU: u16 = 65535;
+const START_TTL: u8 = 0;
+const MAX_TASKS_IN_FLIGHT: usize = 4;
 const IP_HDR_LEN: usize = 20;
 const ICMP_HDR_LEN: usize = 8;
 const EMSGSIZE: i32 = 90;
@@ -33,9 +36,9 @@ async fn main() -> Result<(), std::io::Error> {
         TracerouteProtocol::from_str(&options.protocol.unwrap_or_else(|| "udp".to_string()));
     let pmtud_mutex = Arc::new(Mutex::new(options.pmtud));
 
-    let semaphore = Arc::new(Semaphore::new(4));
-    let ttl_mutex = Arc::new(Mutex::new(0u8));
-    let mtu_mutex = Arc::new(Mutex::new(65535));
+    let semaphore = Arc::new(Semaphore::new(MAX_TASKS_IN_FLIGHT));
+    let ttl_mutex = Arc::new(Mutex::new(START_TTL));
+    let mtu_mutex = Arc::new(Mutex::new(START_MTU));
 
     let mut recv_buf = [0u8; 1024];
     let recv_sock =
@@ -55,7 +58,11 @@ async fn main() -> Result<(), std::io::Error> {
         let data = Arc::clone(&data);
 
         tasks.push(tokio::spawn(async move {
+            /* Allow no more than MAX_TASKS_IN_FLIGHT tasks to run concurrently.
+             * We are limiting the number of tasks in flight so we don't end up
+             * sending more packets then needed by spawning too many of them.  */
             if let Ok(permit) = semaphore.clone().acquire().await {
+                /* Each task increments the TTL, sends a probe, and waits for the response.  */
                 let ttl = {
                     let mut counter = counter_mutex.lock().await;
                     *counter += 1;
@@ -67,6 +74,7 @@ async fn main() -> Result<(), std::io::Error> {
                     TracerouteProtocol::Icmp => trace_icmp(&target, ttl).await,
                 }
 
+                /* Check if we need to perform PMTUD.  */
                 let path_maximum_transmission_unit_discovery = {
                     let guard = pmtud_mutex.lock().await;
 
@@ -100,8 +108,7 @@ async fn main() -> Result<(), std::io::Error> {
                     IcmpTypes::TimeExceeded => {
                         /* A part of the original IPv4 packet (header + at least first 8 bytes)
                          * is contained in an ICMP error message. We use the identification field
-                         * to map responses back to correct hops.
-                         */
+                         * to map responses back to correct hops.  */
                         let original_ipv4_packet =
                             Ipv4Packet::new(&recv_buf[IP_HDR_LEN + ICMP_HDR_LEN..]).unwrap();
 
@@ -148,8 +155,7 @@ async fn main() -> Result<(), std::io::Error> {
                 /* If we have MTU information for previous hop...  */
                 if let Some(previous_mtu) = previous_hop.2 {
                     /* If previous MTU is the same as current, print a line feed,
-                     * otherwise, print MTU information as well.
-                     */
+                     * otherwise, print MTU information as well.  */
                     if previous_mtu == mtu.unwrap() {
                         print!("\n")
                     } else {
@@ -249,8 +255,7 @@ fn build_ipv4_packet(buf: &mut [u8], dest: Ipv4Addr, size: u16, ttl: u8) -> Muta
     packet.set_header_length(5);  /* In bytes.  */
 
     /* We are setting the identification field to the TTL 
-     * that we later use to map responses back to correct hops
-     */
+     * that we later use to map responses back to correct hops.  */
     packet.set_identification(ttl as u16);
     packet.set_next_level_protocol(IpNextHeaderProtocols::Icmp);
     packet.set_source("192.168.1.64".parse::<Ipv4Addr>().unwrap());
