@@ -60,9 +60,9 @@ async fn main() -> Result<(), std::io::Error> {
         tasks.push(tokio::spawn(async move {
             /* Allow no more than MAX_TASKS_IN_FLIGHT tasks to run concurrently.
              * We are limiting the number of tasks in flight so we don't end up
-             * sending more packets then needed by spawning too many of them.  */
+             * sending more packets then needed by spawning too many of them. */
             if let Ok(permit) = semaphore.clone().acquire().await {
-                /* Each task increments the TTL, sends a probe, and waits for the response.  */
+                /* Each task increments the TTL, sends a probe, and waits for the response. */
                 let ttl = {
                     let mut counter = counter_mutex.lock().await;
                     *counter += 1;
@@ -74,7 +74,7 @@ async fn main() -> Result<(), std::io::Error> {
                     TracerouteProtocol::Icmp => trace_icmp(&target, ttl).await,
                 }
 
-                /* Check if we need to perform PMTUD.  */
+                /* Check if we need to perform PMTUD. */
                 let path_maximum_transmission_unit_discovery = {
                     let guard = pmtud_mutex.lock().await;
 
@@ -108,7 +108,7 @@ async fn main() -> Result<(), std::io::Error> {
                     IcmpTypes::TimeExceeded => {
                         /* A part of the original IPv4 packet (header + at least first 8 bytes)
                          * is contained in an ICMP error message. We use the identification field
-                         * to map responses back to correct hops.  */
+                         * to map responses back to correct hops. */
                         let original_ipv4_packet =
                             Ipv4Packet::new(&recv_buf[IP_HDR_LEN + ICMP_HDR_LEN..]).unwrap();
 
@@ -117,7 +117,7 @@ async fn main() -> Result<(), std::io::Error> {
                         let mut data = data.lock().await;
                         data.insert(hop, (ip_addr, hostname, mtu));
 
-                        /* Allow one more task to go through.  */
+                        /* Allow one more task to go through. */
                         semaphore.add_permits(1);
                     }
                     IcmpTypes::EchoReply => {
@@ -143,16 +143,16 @@ async fn main() -> Result<(), std::io::Error> {
     for (i, hop) in data.keys().sorted().enumerate() {
         let (ip_addr, hostname, mtu) = data.get(hop).unwrap();
         
-        /* Print hop, hostname, and ip_addr.  */
+        /* Print hop, hostname, and ip_addr. */
         print!("hop: {} - {} ({:?})", i + 1, hostname, ip_addr);
         
         if mtu.is_none() {
-            /* We have no MTU information for this hop, so print a line feed.  */
+            /* We have no MTU information for this hop, so print a line feed. */
             print!("\n");
         } else {
             /* We have MTU information for this hop. */
             if let Some(previous_hop) = data.get(&(hop-1)) {
-                /* If we have MTU information for previous hop...  */
+                /* If we have MTU information for previous hop... */
                 if let Some(previous_mtu) = previous_hop.2 {
                     /* If previous MTU is the same as current, print a line feed,
                      * otherwise, print MTU information as well.  */
@@ -163,7 +163,7 @@ async fn main() -> Result<(), std::io::Error> {
                     }
                 }
             } else {
-                /* We don't have MTU information for this hop.  */
+                /* We don't have MTU information for this hop. */
                 print!(" - pmtu: {}\n", mtu.unwrap());
             }
         }
@@ -252,10 +252,10 @@ fn build_ipv4_packet(buf: &mut [u8], dest: Ipv4Addr, size: u16, ttl: u8) -> Muta
     let mut packet = MutableIpv4Packet::new(buf).unwrap();
     packet.set_version(4);
     packet.set_ttl(ttl);
-    packet.set_header_length(5);  /* In bytes.  */
+    packet.set_header_length(5);  /* In bytes. */
 
     /* We are setting the identification field to the TTL 
-     * that we later use to map responses back to correct hops.  */
+     * that we later use to map responses back to correct hops. */
     packet.set_identification(ttl as u16);
     packet.set_next_level_protocol(IpNextHeaderProtocols::Icmp);
     packet.set_source("192.168.1.64".parse::<Ipv4Addr>().unwrap());
@@ -301,7 +301,7 @@ impl TracerouteProtocol {
         match protocol {
             "udp" => Self::Udp,
             "icmp" => Self::Icmp,
-            _ => unreachable!(),
+            _ => unimplemented!(),
         }
     }
 }
