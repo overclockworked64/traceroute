@@ -60,7 +60,7 @@ async fn main() -> Result<(), std::io::Error> {
         tasks.push(tokio::spawn(async move {
             /* Allow no more than MAX_TASKS_IN_FLIGHT tasks to run concurrently.
              * We are limiting the number of tasks in flight so we don't end up
-             * sending more packets then needed by spawning too many of them. */
+             * sending more packets than needed by spawning too many tasks. */
             if let Ok(permit) = semaphore.clone().acquire().await {
                 /* Each task increments the TTL, sends a probe, and waits for the response. */
                 let ttl = {
