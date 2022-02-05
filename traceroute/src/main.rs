@@ -40,7 +40,7 @@ async fn main() {
     }
 }
 
-async fn run(options: Opt) -> Result<(), std::io::Error> {
+async fn run(options: Opt) -> Result<(), Box<dyn std::error::Error>> {
     let target = options.target.parse::<Ipv4Addr>().unwrap();
     let protocol =
         TracerouteProtocol::from_str(&options.protocol.unwrap_or_else(|| "udp".to_string()));
@@ -81,7 +81,7 @@ async fn run(options: Opt) -> Result<(), std::io::Error> {
     }
 
     for task in tasks {
-        task.await.unwrap();
+        let _ = task.await?;
     }
 
     print_results(data).await;
@@ -99,7 +99,7 @@ async fn trace(
     recv_sock: Arc<RawSocket>,
     mut recv_buf: [u8; 1024],
     data: Arc<Mutex<Results>>,
-) {
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     /* Allow no more than MAX_TASKS_IN_FLIGHT tasks to run concurrently.
      * We are limiting the number of tasks in flight so we don't end up
      * sending more packets than needed by spawning too many tasks. */
@@ -137,23 +137,31 @@ async fn trace(
             None
         };
 
-        let (_bytes_received, ip_addr) = recv_sock.recv_from(&mut recv_buf).await.unwrap();
+        let (_bytes_received, ip_addr) = recv_sock.recv_from(&mut recv_buf).await?;
 
-        let icmp_packet = IcmpPacket::new(&recv_buf[IP_HDR_LEN..]).unwrap();
+        let icmp_packet = match IcmpPacket::new(&recv_buf[IP_HDR_LEN..]) {
+            Some(packet) => packet,
+            None => return Err("Couldn't make an ICMP packet.".into()),
+        };
 
         let reverse_dns_task = tokio::task::spawn_blocking(move || {
-            dns_lookup::lookup_addr(&ip_addr.clone().ip()).unwrap()
+            dns_lookup::lookup_addr(&ip_addr.clone().ip())
         });
-        let hostname = reverse_dns_task.await.unwrap();
+        let hostname = match reverse_dns_task.await? {
+            Ok(host) => host,
+            Err(e) => return Err(format!("Reverse DNS failed: {:?}", e).into()),
+
+        };
 
         match icmp_packet.get_icmp_type() {
             IcmpTypes::TimeExceeded => {
                 /* A part of the original IPv4 packet (header + at least first 8 bytes)
                  * is contained in an ICMP error message. We use the identification field
                  * to map responses back to correct hops. */
-                let original_ipv4_packet =
-                    Ipv4Packet::new(&recv_buf[IP_HDR_LEN + ICMP_HDR_LEN..]).unwrap();
-
+                let original_ipv4_packet = match Ipv4Packet::new(&recv_buf[IP_HDR_LEN + ICMP_HDR_LEN..]) {
+                    Some(packet) => packet,
+                    None => return Err("Couldn't make an IPv4 packet.".into()),
+                };
                 let hop = original_ipv4_packet.get_identification();
 
                 let mut data = data.lock().await;
@@ -162,7 +170,7 @@ async fn trace(
                 /* Allow one more task to go through. */
                 semaphore.add_permits(1);
             }
-            IcmpTypes::EchoReply => {
+            IcmpTypes::EchoReply | IcmpTypes::DestinationUnreachable => {
                 let mut data = data.lock().await;
                 data.insert(255, (ip_addr, hostname, mtu));
 
@@ -173,6 +181,8 @@ async fn trace(
 
         permit.forget();
     }
+
+    Ok(())
 }
 
 async fn print_results(data: Arc<Mutex<Results>>) {
