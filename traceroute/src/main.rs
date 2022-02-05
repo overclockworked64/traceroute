@@ -30,9 +30,17 @@ const EMSGSIZE: i32 = 90;
 type Results = HashMap<u16, (std::net::SocketAddr, String, Option<u16>)>;
 
 #[tokio::main]
-async fn main() -> Result<(), std::io::Error> {
+async fn main() {
     let options = Opt::from_args();
+    let result = run(options).await;
 
+    match result {
+        Ok(_) => {}
+        Err(e) => eprintln!("traceroute error: {}", e),
+    }
+}
+
+async fn run(options: Opt) -> Result<(), std::io::Error> {
     let target = options.target.parse::<Ipv4Addr>().unwrap();
     let protocol =
         TracerouteProtocol::from_str(&options.protocol.unwrap_or_else(|| "udp".to_string()));
@@ -42,7 +50,7 @@ async fn main() -> Result<(), std::io::Error> {
     let ttl_mutex = Arc::new(Mutex::new(START_TTL));
     let mtu_mutex = Arc::new(Mutex::new(START_MTU));
 
-    let mut recv_buf = [0u8; 1024];
+    let recv_buf = [0u8; 1024];
     let recv_sock =
         Arc::new(RawSocket::new(Domain::ipv4(), Type::raw(), Protocol::icmpv4().into()).unwrap());
 
@@ -59,81 +67,17 @@ async fn main() -> Result<(), std::io::Error> {
         let recv_sock = Arc::clone(&recv_sock);
         let data = Arc::clone(&data);
 
-        tasks.push(tokio::spawn(async move {
-            /* Allow no more than MAX_TASKS_IN_FLIGHT tasks to run concurrently.
-             * We are limiting the number of tasks in flight so we don't end up
-             * sending more packets than needed by spawning too many tasks. */
-            if let Ok(permit) = semaphore.clone().acquire().await {
-                /* Each task increments the TTL, sends a probe, and waits for the response. */
-                let ttl = {
-                    let mut counter = counter_mutex.lock().await;
-                    *counter += 1;
-                    *counter
-                };
-
-                match protocol {
-                    TracerouteProtocol::Udp => trace_udp(&target, ttl).await,
-                    TracerouteProtocol::Icmp => trace_icmp(&target, ttl).await,
-                }
-
-                /* Check if we need to perform PMTUD. */
-                let path_maximum_transmission_unit_discovery = {
-                    let guard = pmtud_mutex.lock().await;
-
-                    *guard
-                };
-
-                let mtu: Option<u16> = if path_maximum_transmission_unit_discovery {
-                    Some(
-                        path_mtu_discovery(
-                            &target,
-                            Arc::clone(&mtu_mutex),
-                            ttl,
-                            Arc::clone(&pmtud_mutex),
-                        )
-                        .await,
-                    )
-                } else {
-                    None
-                };
-
-                let (_bytes_received, ip_addr) = recv_sock.recv_from(&mut recv_buf).await.unwrap();
-
-                let icmp_packet = IcmpPacket::new(&recv_buf[IP_HDR_LEN..]).unwrap();
-
-                let reverse_dns_task = tokio::task::spawn_blocking(move || {
-                    dns_lookup::lookup_addr(&ip_addr.clone().ip()).unwrap()
-                });
-                let hostname = reverse_dns_task.await.unwrap();
-
-                match icmp_packet.get_icmp_type() {
-                    IcmpTypes::TimeExceeded => {
-                        /* A part of the original IPv4 packet (header + at least first 8 bytes)
-                         * is contained in an ICMP error message. We use the identification field
-                         * to map responses back to correct hops. */
-                        let original_ipv4_packet =
-                            Ipv4Packet::new(&recv_buf[IP_HDR_LEN + ICMP_HDR_LEN..]).unwrap();
-
-                        let hop = original_ipv4_packet.get_identification();
-
-                        let mut data = data.lock().await;
-                        data.insert(hop, (ip_addr, hostname, mtu));
-
-                        /* Allow one more task to go through. */
-                        semaphore.add_permits(1);
-                    }
-                    IcmpTypes::EchoReply => {
-                        let mut data = data.lock().await;
-                        data.insert(255, (ip_addr, hostname, mtu));
-
-                        semaphore.close();
-                    }
-                    _ => {}
-                }
-
-                permit.forget();
-            }
-        }));
+        tasks.push(tokio::spawn(trace(
+            target,
+            protocol,
+            semaphore,
+            counter_mutex,
+            mtu_mutex,
+            pmtud_mutex,
+            recv_sock,
+            recv_buf,
+            data,
+        )));
     }
 
     for task in tasks {
@@ -145,21 +89,107 @@ async fn main() -> Result<(), std::io::Error> {
     Ok(())
 }
 
+async fn trace(
+    target: Ipv4Addr,
+    protocol: TracerouteProtocol,
+    semaphore: Arc<Semaphore>,
+    counter_mutex: Arc<Mutex<u8>>,
+    mtu_mutex: Arc<Mutex<u16>>,
+    pmtud_mutex: Arc<Mutex<bool>>,
+    recv_sock: Arc<RawSocket>,
+    mut recv_buf: [u8; 1024],
+    data: Arc<Mutex<Results>>,
+) {
+    /* Allow no more than MAX_TASKS_IN_FLIGHT tasks to run concurrently.
+     * We are limiting the number of tasks in flight so we don't end up
+     * sending more packets than needed by spawning too many tasks. */
+    if let Ok(permit) = semaphore.clone().acquire().await {
+        /* Each task increments the TTL, sends a probe, and waits for the response. */
+        let ttl = {
+            let mut counter = counter_mutex.lock().await;
+            *counter += 1;
+            *counter
+        };
+
+        match protocol {
+            TracerouteProtocol::Udp => trace_udp(&target, ttl).await,
+            TracerouteProtocol::Icmp => trace_icmp(&target, ttl).await,
+        }
+
+        /* Check if we need to perform PMTUD. */
+        let path_maximum_transmission_unit_discovery = {
+            let guard = pmtud_mutex.lock().await;
+
+            *guard
+        };
+
+        let mtu: Option<u16> = if path_maximum_transmission_unit_discovery {
+            Some(
+                path_mtu_discovery(
+                    &target,
+                    Arc::clone(&mtu_mutex),
+                    ttl,
+                    Arc::clone(&pmtud_mutex),
+                )
+                .await,
+            )
+        } else {
+            None
+        };
+
+        let (_bytes_received, ip_addr) = recv_sock.recv_from(&mut recv_buf).await.unwrap();
+
+        let icmp_packet = IcmpPacket::new(&recv_buf[IP_HDR_LEN..]).unwrap();
+
+        let reverse_dns_task = tokio::task::spawn_blocking(move || {
+            dns_lookup::lookup_addr(&ip_addr.clone().ip()).unwrap()
+        });
+        let hostname = reverse_dns_task.await.unwrap();
+
+        match icmp_packet.get_icmp_type() {
+            IcmpTypes::TimeExceeded => {
+                /* A part of the original IPv4 packet (header + at least first 8 bytes)
+                 * is contained in an ICMP error message. We use the identification field
+                 * to map responses back to correct hops. */
+                let original_ipv4_packet =
+                    Ipv4Packet::new(&recv_buf[IP_HDR_LEN + ICMP_HDR_LEN..]).unwrap();
+
+                let hop = original_ipv4_packet.get_identification();
+
+                let mut data = data.lock().await;
+                data.insert(hop, (ip_addr, hostname, mtu));
+
+                /* Allow one more task to go through. */
+                semaphore.add_permits(1);
+            }
+            IcmpTypes::EchoReply => {
+                let mut data = data.lock().await;
+                data.insert(255, (ip_addr, hostname, mtu));
+
+                semaphore.close();
+            }
+            _ => {}
+        }
+
+        permit.forget();
+    }
+}
+
 async fn print_results(data: Arc<Mutex<Results>>) {
     let data = data.lock().await;
 
     for (i, hop) in data.keys().sorted().enumerate() {
         let (ip_addr, hostname, mtu) = data.get(hop).unwrap();
-        
+
         /* Print hop, hostname, and ip_addr. */
         print!("hop: {} - {} ({:?})", i + 1, hostname, ip_addr);
-        
+
         if mtu.is_none() {
             /* We have no MTU information for this hop, so print a line feed. */
             print!("\n");
         } else {
             /* We have MTU information for this hop. */
-            if let Some(previous_hop) = data.get(&(hop-1)) {
+            if let Some(previous_hop) = data.get(&(hop - 1)) {
                 /* If we have MTU information for previous hop... */
                 if let Some(previous_mtu) = previous_hop.2 {
                     /* If previous MTU is the same as current, print a line feed,
@@ -258,9 +288,9 @@ fn build_ipv4_packet(buf: &mut [u8], dest: Ipv4Addr, size: u16, ttl: u8) -> Muta
     let mut packet = MutableIpv4Packet::new(buf).unwrap();
     packet.set_version(4);
     packet.set_ttl(ttl);
-    packet.set_header_length(5);  /* In bytes. */
+    packet.set_header_length(5); /* In bytes. */
 
-    /* We are setting the identification field to the TTL 
+    /* We are setting the identification field to the TTL
      * that we later use to map responses back to correct hops. */
     packet.set_identification(ttl as u16);
     packet.set_next_level_protocol(IpNextHeaderProtocols::Icmp);
