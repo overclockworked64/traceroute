@@ -27,6 +27,8 @@ const IP_HDR_LEN: usize = 20;
 const ICMP_HDR_LEN: usize = 8;
 const EMSGSIZE: i32 = 90;
 
+type Results = HashMap<u16, (std::net::SocketAddr, String, Option<u16>)>;
+
 #[tokio::main]
 async fn main() -> Result<(), std::io::Error> {
     let options = Opt::from_args();
@@ -138,6 +140,12 @@ async fn main() -> Result<(), std::io::Error> {
         task.await.unwrap();
     }
 
+    print_results(data).await;
+
+    Ok(())
+}
+
+async fn print_results(data: Arc<Mutex<Results>>) {
     let data = data.lock().await;
 
     for (i, hop) in data.keys().sorted().enumerate() {
@@ -168,8 +176,6 @@ async fn main() -> Result<(), std::io::Error> {
             }
         }
     }
-
-    Ok(())
 }
 
 async fn trace_udp(target: &Ipv4Addr, ttl: u8) {
